@@ -1,7 +1,6 @@
 import asyncio
 import edge_tts
 
-# 悩めるお前のための「三連の喉」
 VOICES = {
     "Andrew": "en-US-AndrewNeural",
     "Christopher": "en-US-ChristopherNeural",
