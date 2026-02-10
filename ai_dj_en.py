@@ -191,26 +191,29 @@ async def main_loop():
             current_id = next_id
 
     except (asyncio.CancelledError, KeyboardInterrupt):
-        print("\n   [System] Interrupt received...")
+        print("\n   [System] Interrupt received. Finalizing the broadcast...")
         
+        # 1. 台本の準備
         ed_script = await generate_script_async("closing")
-        output_path = "final.mp3"
-        await edge_tts.Communicate(ed_script, VOICE_NAME, rate="-10%").save(output_path)
+        await edge_tts.Communicate(ed_script, VOICE_NAME, rate="-10%").save("final.mp3")
         
-        # 1. 再生前にロードを完了させる（不連続性の回避）
-        final_voice = pygame.mixer.Sound(output_path)
+        # 2. 音声のロード
+        final_voice = pygame.mixer.Sound("final.mp3")
         final_voice.set_volume(VOICE_LEVEL)
-
-        # 2. ダッキング：喋る前に音楽を少し下げる（0.7 -> 0.3）
+        
+        # 3. 音楽を少し下げて準備
         pygame.mixer.music.set_volume(0.3)
-        await asyncio.sleep(0.5) # わずかな静寂
+        await asyncio.sleep(0.5)
         
-        # 3. 再生
-        final_voice.play()
+        # 4. 【最重要】fade_ms を指定して再生
+        # 再生開始の瞬間の電圧スパイクを、0.1秒のフェードインで滑らかにする
+        final_voice.play(fade_ms=200) 
         
+        # 5. 喋りが終わるまで待機
         while pygame.mixer.get_busy(): 
             await asyncio.sleep(0.1)
             
+        # 6. 音楽のフェードアウト
         print("   [System] Speech finished. Fading out music...")
         pygame.mixer.music.fadeout(5000) 
         
