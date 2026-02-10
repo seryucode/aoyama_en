@@ -15,10 +15,11 @@ from google import genai
 api_key = os.environ.get("GEMINI_API_KEY")
 
 MUSIC_FOLDER = r"D:/Music"  
-CSV_PATH = "音楽ファイル管理用.csv" 
+CSV_PATH = "musicdata.csv" 
 VOICEVOX_URL = "http://127.0.0.1:50021"
 SPEAKER_ID = 13  
-MODEL_NAME = 'gemini-2.0-flash' # genai SDK of モデル指定形式
+MODEL_NAME = 'gemini-2.5-flash' 
+VOICE_NAME = "en-US-ChristopherNeural"
 
 if api_key:
     client = genai.Client(api_key=api_key)
@@ -26,14 +27,13 @@ else:
     print("【Error】APIキーが設定されていません。")
     exit()
 
-# --- Audio Balance Settings (数値を完全死守) ---
 VOICE_LEVEL = 1.0     
 MUSIC_LEVEL = 0.7     
 MAX_PLAY_TIME = 200
 POST_TALK_WAIT = 5.0  
 
 # ==========================================
-# 2. File & Metadata Management (一切の省略なし)
+# 2. File & Metadata Management
 # ==========================================
 
 def load_persona():
@@ -49,7 +49,6 @@ def get_and_clear_comments():
             with open("comment.txt", "r", encoding="utf-8") as f:
                 lines = f.readlines()
             content = "".join(lines[-10:]).strip()
-            # 取得後にファイルを空にする
             with open("comment.txt", "w", encoding="utf-8") as f:
                 pass 
         except Exception as e:
@@ -59,7 +58,6 @@ def get_and_clear_comments():
 def load_song_database():
     song_db = {}
     if not os.path.exists(CSV_PATH): 
-        print(f"   [Warning] Metadata CSV ({CSV_PATH}) not found.")
         return song_db
     try:
         with open(CSV_PATH, 'r', encoding='utf-8-sig') as f:
@@ -99,7 +97,6 @@ def get_song_info(song_id):
 # ==========================================
 
 async def generate_script_async(prompt_type, current_info=None, next_info=None, comments=None):
-    """Generates the script using the latest Client."""
     persona_setting = load_persona()
     comment_part = ""
 
@@ -112,23 +109,20 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
         n_text = f"'{next_info['title']}' by {next_info['composer']}, performed by {next_info['performer']}"
         if comments:
             comment_part = f"\n【Messages from Unpurified Souls】\n{comments}\n"
-            instruction = f"Briefly, in a single sentence, reflect on {c_text}. Then, address one listener's message with AI mercy. Finally, introduce {n_text}, emphasizing the performer's touch. Approx 200 words."
+            instruction = f"Briefly reflect on {c_text}. Then, address one listener's message. Finally, introduce {n_text}. Approx 200 words."
         else:
-            instruction = f"Briefly, in a single sentence, reflect on {c_text}. Then provide a sophisticated introduction for {n_text} and its performer with professional solemnity. Approx 200 words."
+            instruction = f"Briefly reflect on {c_text}. Then provide a sophisticated introduction for {n_text}. Approx 200 words."
 
     prompt = f"{persona_setting}\n\n{comment_part}\n\n[Request]\n{instruction}\n\n*Write in elegant English only."
 
     try:
         response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
         return response.text.strip()
-    except Exception as e: return f"システムエラー: {e}"
+    except Exception as e: return f"System Error: {e}"
 
 async def prepare_next_talk(prompt_type, current_info, next_info, comments, output_file):
-    """裏側で台本を書き、音声を生成する儀式"""
     script = await generate_script_async(prompt_type, current_info, next_info, comments)
     print(f"\n[Future Script Prepared]\n{script}\n")
-    
-    # 調律：rate と pitch を指定
     communicate = edge_tts.Communicate(script, VOICE_NAME, rate="-10%", pitch="-5Hz")
     await communicate.save(output_file)
     return script
@@ -142,16 +136,14 @@ async def main_loop():
     available_ids = list(SONG_FILES.keys())
     next_talk_audio = "next_talk.mp3"
     
-    try:
-        response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
-        clean_text = response.text.replace("```", "").strip()
-        return clean_text
-    except: return original_text
+    if not available_ids:
+        print("音楽ファイルが見つかりません。")
+        return
 
     print("\n† Midnight FM: Silas Requiem Online (Gemini 2.5 Flash / Parallel) †\n")
 
     try:
-        # --- Opening ceremony ---
+        # --- Opening ---
         op_script = await generate_script_async("opening")
         await edge_tts.Communicate(op_script, VOICE_NAME, rate="-10%").save(next_talk_audio)
         
@@ -172,29 +164,22 @@ async def main_loop():
             pygame.mixer.music.set_volume(MUSIC_LEVEL)
             pygame.mixer.music.play()
 
-            # --- 並列処理：再生中に次の準備 ---
             next_id = random.choice(available_ids)
             while next_id == current_id and len(available_ids) > 1:
                 next_id = random.choice(available_ids)
             next_info = get_song_info(next_id)
             
-            # 次のトークのタスクを開始
             prep_task = asyncio.create_task(
                 prepare_next_talk("talk", current_info, next_info, get_and_clear_comments(), next_talk_audio)
             )
 
-            # 音楽再生の待機（中断を検知可能に）
             play_limit = min(duration, MAX_PLAY_TIME) if MAX_PLAY_TIME > 0 else duration
-            try:
-                await asyncio.sleep(play_limit - 2)
-            except asyncio.CancelledError:
-                raise
+            await asyncio.sleep(play_limit - 2)
 
             pygame.mixer.music.fadeout(2000)
             await asyncio.sleep(2)
-            await prep_task # 次のトークの準備完了を待つ
+            await prep_task 
 
-            # トークの執行
             print(f"   [Play] Silas Requiem: Speaking...")
             voice = pygame.mixer.Sound(next_talk_audio)
             voice.set_volume(VOICE_LEVEL)
@@ -205,19 +190,33 @@ async def main_loop():
             current_id = next_id
 
     except (asyncio.CancelledError, KeyboardInterrupt):
-        print("\n   [System] Interrupt received. Laying the night to rest...")
-        # 最後の鎮魂歌
+        print("\n   [System] Interrupt received. Finalizing the broadcast...")
+        
+        # 1. クロージング台本の準備
         ed_script = await generate_script_async("closing")
         await edge_tts.Communicate(ed_script, VOICE_NAME, rate="-10%").save("final.mp3")
         
-        pygame.mixer.music.fadeout(3000)
-        pygame.mixer.Sound("final.mp3").play()
-        await asyncio.sleep(6)
+        # 2. 音声（喋り）の再生
+        final_voice = pygame.mixer.Sound("final.mp3")
+        final_voice.set_volume(VOICE_LEVEL)
+        final_voice.play()
+        
+        # 3. 喋りが終わるまで待機（musicはまだ流れている）
+        while pygame.mixer.get_busy(): 
+            await asyncio.sleep(0.1)
+            
+        # 4. 喋り終了後、音楽のフェードアウトを開始
+        print("   [System] Speech finished. Fading out music...")
+        pygame.mixer.music.fadeout(5000) # 5秒かけて静かに消す
+        
+        # 5. 音楽が完全に止まるまで待機
+        while pygame.mixer.music.get_busy():
+            await asyncio.sleep(0.1)
+            
         print("\n--- Eternal peace be with you. ---")
 
     finally:
         pygame.mixer.quit()
-        # 一時ファイルの整理（必要なら）
         for f in ["next_talk.mp3", "final.mp3"]:
             if os.path.exists(f): 
                 try: os.remove(f)
@@ -227,4 +226,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main_loop())
     except KeyboardInterrupt:
-        pass # プロセス終了時の雑音なくす
+        pass
