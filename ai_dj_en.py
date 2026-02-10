@@ -7,23 +7,24 @@ import csv
 import pygame
 import asyncio
 import edge_tts
-from google import genai  # 最新の法に基づく
+from google import genai
 
 # ==========================================
-# 1. Basic Settings & Client Integration
+# 1. 基本設定エリア
 # ==========================================
 api_key = os.environ.get("GEMINI_API_KEY")
-if not api_key:
-    print("【Error】API Key missing from environment variables.")
+
+MUSIC_FOLDER = r"D:/Music"  
+CSV_PATH = "音楽ファイル管理用.csv" 
+VOICEVOX_URL = "http://127.0.0.1:50021"
+SPEAKER_ID = 13  
+MODEL_NAME = 'gemini-2.0-flash' # genai SDK of モデル指定形式
+
+if api_key:
+    client = genai.Client(api_key=api_key)
+else:
+    print("【Error】APIキーが設定されていません。")
     exit()
-
-# クライアントという名の支配人を一人置く
-client = genai.Client(api_key=api_key)
-MODEL_NAME = 'gemini-2.5-flash'  # お前が執着する2026年の最新知能
-
-MUSIC_FOLDER = r"D:/Music"
-CSV_PATH = "musicdata.csv"
-VOICE_NAME = "en-US-ChristopherNeural"
 
 # --- Audio Balance Settings (数値を完全死守) ---
 VOICE_LEVEL = 1.0     
@@ -117,12 +118,10 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
 
     prompt = f"{persona_setting}\n\n{comment_part}\n\n[Request]\n{instruction}\n\n*Write in elegant English only."
 
-    loop = asyncio.get_event_loop()
-    # 外部通信をスレッドで実行し、イベントループを止めない
-    response = await loop.run_in_executor(None, lambda: client.models.generate_content(
-        model=MODEL_NAME, contents=prompt
-    ))
-    return response.text.strip()
+    try:
+        response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+        return response.text.strip()
+    except Exception as e: return f"システムエラー: {e}"
 
 async def prepare_next_talk(prompt_type, current_info, next_info, comments, output_file):
     """裏側で台本を書き、音声を生成する儀式"""
@@ -143,9 +142,11 @@ async def main_loop():
     available_ids = list(SONG_FILES.keys())
     next_talk_audio = "next_talk.mp3"
     
-    if not available_ids:
-        print("【Error】No music files found. The silence is too deep.")
-        return
+    try:
+        response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+        clean_text = response.text.replace("```", "").strip()
+        return clean_text
+    except: return original_text
 
     print("\n† Midnight FM: Silas Requiem Online (Gemini 2.5 Flash / Parallel) †\n")
 
