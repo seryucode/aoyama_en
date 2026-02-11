@@ -123,7 +123,7 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
 async def prepare_next_talk(prompt_type, current_info, next_info, comments, output_file):
     script = await generate_script_async(prompt_type, current_info, next_info, comments)
     print(f"\n[Future Script Prepared]\n{script}\n")
-    communicate = edge_tts.Communicate(script, VOICE_NAME, rate="-10%", pitch="-5Hz")
+    communicate = edge_tts.Communicate(script, VOICE_NAME, rate="-10%")
     await communicate.save(output_file)
     return script
 
