@@ -16,16 +16,16 @@ from google import genai
 api_key = os.environ.get("GEMINI_API_KEY")
 
 # --- 選曲モード設定 ---
-RANDOM_MODE = False  # True: 時間を無視してランダム / False: 時間に合わせる
-UTC_OFFSET = 9      # 日本なら 9
-BOOST_2 = 10.0      # play_flag=2 の時の倍率
+RANDOM_MODE = False
+UTC_OFFSET = 9
+BOOST_2 = 10.0
 # --------------------
 
-MUSIC_FOLDER = r"D:/Music"  
-CSV_PATH = "musicdata.csv" 
+MUSIC_FOLDER = r"D:/Music"
+CSV_PATH = "musicdata.csv"
 VOICEVOX_URL = "http://127.0.0.1:50021"
-SPEAKER_ID = 13  
-MODEL_NAME = 'gemini-2.5-flash' 
+SPEAKER_ID = 13
+MODEL_NAME = 'gemini-2.5-flash'
 VOICE_NAME = "en-US-ChristopherNeural"
 
 if api_key:
@@ -34,10 +34,10 @@ else:
     print("【Error】APIキーが設定されていません。")
     exit()
 
-VOICE_LEVEL = 1.0      
-MUSIC_LEVEL = 0.8      
+VOICE_LEVEL = 1.0
+MUSIC_LEVEL = 0.8
 MAX_PLAY_TIME = 200
-POST_TALK_WAIT = 5.0  
+POST_TALK_WAIT = 5.0
 
 # ==========================================
 # 2. File & Metadata Management
@@ -92,7 +92,15 @@ def scan_music_files():
         if match: files_map[int(match.group(1))] = path
     return files_map
 
-# --- 知的選曲エンジンの核 ---
+def get_song_info(song_id):
+    if song_id in SONG_DB:
+        return SONG_DB[song_id]
+    if song_id in SONG_FILES:
+        fn = os.path.basename(SONG_FILES[song_id])
+        return {'title': fn, 'composer': 'Unknown', 'performer': 'Unknown'}
+    return None
+
+# --- 選曲エンジン ---
 
 def get_now_jst():
     return datetime.now(timezone(timedelta(hours=UTC_OFFSET)))
@@ -107,7 +115,6 @@ def select_next_song_weighted(song_db, available_ids):
     now_ts = get_now_jst().timestamp()
     
     candidates, weights = [], []
-    
     for sid in available_ids:
         song = song_db.get(sid)
         if not song or song.get('play_flag', 0) == 0: continue
@@ -116,7 +123,10 @@ def select_next_song_weighted(song_db, available_ids):
         s_val = song.get('time_scale', 5.0)
         
         lp = song.get('last_played', '')
-        time_diff = (now_ts - datetime.fromisoformat(lp).timestamp()) if lp else 86400.0
+        try:
+            time_diff = (now_ts - datetime.fromisoformat(lp).timestamp()) if lp else 86400.0
+        except:
+            time_diff = 86400.0
         
         if RANDOM_MODE:
             w = p_logic * time_diff
@@ -124,7 +134,7 @@ def select_next_song_weighted(song_db, available_ids):
             dist = abs(t_target - s_val)
             w = (p_logic / ((dist + 1.0) ** 10)) * time_diff
             if dist > 3.0:
-                w *= 0.000001 
+                w *= 0.000001
         
         candidates.append(sid)
         weights.append(w)
@@ -139,6 +149,7 @@ def mark_as_played(song_id):
     
     if not os.path.exists(CSV_PATH): return
     rows = []
+    fieldnames = []
     with open(CSV_PATH, 'r', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames
@@ -147,19 +158,13 @@ def mark_as_played(song_id):
             rows.append(row)
     with open(CSV_PATH, 'w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader(); writer.writerows(rows)
+        writer.writeheader()
+        writer.writerows(rows)
 
 # ----------------------------
 
 SONG_DB = load_song_database()
 SONG_FILES = scan_music_files()
-
-def get_song_info(song_id):
-    if song_id in SONG_DB: return SONG_DB[song_id]
-    if song_id in SONG_FILES:
-        fn = os.path.basename(SONG_FILES[song_id])
-        return {'title': fn, 'composer': 'Unknown', 'performer': 'Unknown'}
-    return None
 
 # ==========================================
 # 3. AI Script Generation & Voice Synthesis
@@ -170,22 +175,24 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
     comment_part = ""
 
     if prompt_type == "opening":
-        instruction = "Write a program opening. Greet listeners in the silence of the night. Approx 100 words."
+        instruction = "Write a program opening. Greet listeners in the silence of the night. Approx 100 words. Do NOT describe sound effects (e.g. 'music starts'). Write ONLY the spoken words."
     elif prompt_type == "closing":
-        instruction = "Write a program closing. Bid farewell to the day. Approx 100 words."
+        instruction = "Write a program closing. Bid farewell to the day. Approx 100 words. Do NOT describe sound effects. Write ONLY the spoken words."
     else:
         c_text = f"'{current_info['title']}' by {current_info['composer']}, performed by {current_info['performer']}"
         n_text = f"'{next_info['title']}' by {next_info['composer']}, performed by {next_info['performer']}"
         if comments:
             comment_part = f"\n【Messages from Unpurified Souls】\n{comments}\n"
-            instruction = f"Briefly reflect on {c_text}. Then, address one listener's message. Finally, introduce {n_text}. Approx 200 words."
+            instruction = (f"Briefly reflect on {c_text}. Then, address one listener's message. "
+                           f"IMPORTANT: The speech must be 100% English. "
+                           f"Finally, introduce {n_text}. "
+                           "Approx 200 words. Do NOT include stage directions or sound descriptions (e.g., '(music fades)'). "
+                           "Write ONLY the spoken words. After the script, add a brief Japanese translation "
+                           "of your reply at the very end, prefixed with '[LOG]'.")
         else:
-            instruction = f"Briefly reflect on {c_text}. Then provide a sophisticated introduction for {n_text}. Approx 200 words."
+            instruction = f"Briefly reflect on {c_text}. Then provide a sophisticated introduction for {n_text}. Approx 200 words. Do NOT include sound effects. Write ONLY the spoken words."
 
-    # ログ用の日本語訳を求める指示を追加
-    instruction += "\nAfter the English script, add a brief Japanese translation/summary for the console log. Prefix it with '[LOG]'."
-
-    prompt = f"{persona_setting}\n\n{comment_part}\n\n[Request]\n{instruction}\n\n*Write in elegant English only, except for the section after [LOG]."
+    prompt = f"{persona_setting}\n\n{comment_part}\n\n[Request]\n{instruction}\n\n*Write in elegant English only (except after [LOG] if requested). Strictly NO sound effects or stage directions."
 
     try:
         response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
@@ -193,21 +200,19 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
     except Exception as e: return f"System Error: {e}"
 
 async def prepare_next_talk(prompt_type, current_info, next_info, comments, output_file):
-    # 台本の生成
     full_response = await generate_script_async(prompt_type, current_info, next_info, comments)
     
-    # [LOG] タグで分割（大文字小文字を問わず分割）
     parts = re.split(r'\[LOG\]', full_response, flags=re.IGNORECASE)
     speech_text = parts[0].strip()
-    log_text = parts[1].strip() if len(parts) > 1 else "No translation available."
+    speech_text = re.sub(r'\[.*?\]', '', speech_text).strip()
+    
+    if comments:
+        print(f"\n[Future Script Prepared]\n{speech_text}")
+        if len(parts) > 1:
+            print(f"\n[Translation Log]\n{parts[1].strip()}\n")
+    else:
+        print(f"\n[Future Script Prepared]\n{speech_text}")
 
-    # ログ画面にだけ日本語を出す
-    print("-" * 30)
-    print(f"[Future Speech]\n{speech_text}")
-    print(f"\n[Translation Log]\n{log_text}")
-    print("-" * 30)
-
-    # 音声合成は英語部分のみを使用
     communicate = edge_tts.Communicate(speech_text, VOICE_NAME, rate="-10%")
     await communicate.save(output_file)
     return speech_text
@@ -230,19 +235,12 @@ async def main_loop():
     print(f"\n† Midnight FM: Silas Requiem Online ({mode_text} / UTC+{UTC_OFFSET}) †\n")
 
     try:
-        # オープニングもログ分割に対応させるため修正
-        op_full_response = await generate_script_async("opening")
-        op_parts = re.split(r'\[LOG\]', op_full_response, flags=re.IGNORECASE)
-        op_speech = op_parts[0].strip()
-        op_log = op_parts[1].strip() if len(op_parts) > 1 else ""
-        
-        if op_log: print(f"\n[System Log: Opening Translation]\n{op_log}\n")
-        
-        await edge_tts.Communicate(op_speech, VOICE_NAME, rate="-10%").save(next_talk_audio)
+        op_script = await generate_script_async("opening")
+        print(f"[Opening Script]\n{op_script}\n")
+        await edge_tts.Communicate(op_script, VOICE_NAME, rate="-10%").save(next_talk_audio)
         
         voice = pygame.mixer.Sound(next_talk_audio)
-        voice.set_volume(VOICE_LEVEL)
-        voice.play()
+        voice.set_volume(VOICE_LEVEL); voice.play()
         while pygame.mixer.get_busy(): await asyncio.sleep(0.1)
 
         current_id = select_next_song_weighted(SONG_DB, available_ids)
@@ -255,8 +253,7 @@ async def main_loop():
 
             print(f"\n♪ Now Playing: {current_info['title']} [{int(duration)//60:02}:{int(duration)%60:02}]")
             pygame.mixer.music.load(SONG_FILES[current_id])
-            pygame.mixer.music.set_volume(MUSIC_LEVEL)
-            pygame.mixer.music.play()
+            pygame.mixer.music.set_volume(MUSIC_LEVEL); pygame.mixer.music.play()
 
             next_id = select_next_song_weighted(SONG_DB, available_ids)
             next_info = get_song_info(next_id)
@@ -268,14 +265,11 @@ async def main_loop():
             play_limit = min(duration, MAX_PLAY_TIME) if MAX_PLAY_TIME > 0 else duration
             await asyncio.sleep(play_limit - 2)
 
-            pygame.mixer.music.fadeout(2000)
-            await asyncio.sleep(2)
-            await prep_task 
+            pygame.mixer.music.fadeout(2000); await asyncio.sleep(2); await prep_task 
 
             print(f"   [Play] Silas Requiem: Speaking...")
             voice = pygame.mixer.Sound(next_talk_audio)
-            voice.set_volume(VOICE_LEVEL)
-            voice.play()
+            voice.set_volume(VOICE_LEVEL); voice.play()
             while pygame.mixer.get_busy(): await asyncio.sleep(0.1)
             
             await asyncio.sleep(POST_TALK_WAIT)
@@ -283,27 +277,18 @@ async def main_loop():
 
     except (asyncio.CancelledError, KeyboardInterrupt):
         print("\n   [System] Finalizing...")
-        ed_full = await generate_script_async("closing")
-        ed_parts = re.split(r'\[LOG\]', ed_full, flags=re.IGNORECASE)
-        ed_speech = ed_parts[0].strip()
-        
-        await edge_tts.Communicate(ed_speech, VOICE_NAME, rate="-10%").save("final.mp3")
+        ed_script = await generate_script_async("closing")
+        print(f"[Closing Script]\n{ed_script}")
+        await edge_tts.Communicate(ed_script, VOICE_NAME, rate="-10%").save("final.mp3")
         final_voice = pygame.mixer.Sound("final.mp3")
-        final_voice.set_volume(VOICE_LEVEL)
-        pygame.mixer.music.set_volume(0.3)
-        await asyncio.sleep(0.5)
-        final_voice.play(fade_ms=300) 
+        final_voice.set_volume(VOICE_LEVEL); final_voice.play()
         while pygame.mixer.get_busy(): await asyncio.sleep(0.1)
-        pygame.mixer.music.fadeout(5000) 
-        while pygame.mixer.music.get_busy(): await asyncio.sleep(0.1)
-        print("\n--- Eternal peace be with you. ---")
 
     finally:
         pygame.mixer.quit()
-        for f in ["next_talk.mp3", "final.mp3"]:
-            if os.path.exists(f): 
-                try: os.remove(f)
-                except: pass
+        if os.path.exists(next_talk_audio):
+            try: os.remove(next_talk_audio)
+            except: pass
 
 if __name__ == "__main__":
     try:
