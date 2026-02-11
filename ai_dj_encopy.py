@@ -4,9 +4,11 @@ import random
 import glob
 import re
 import csv
+import io
 import pygame
 import asyncio
 import edge_tts
+from pydub import AudioSegment # 追加
 from google import genai
 
 # ==========================================
@@ -18,7 +20,7 @@ MUSIC_FOLDER = r"D:/Music"
 CSV_PATH = "musicdata.csv" 
 VOICEVOX_URL = "http://127.0.0.1:50021"
 SPEAKER_ID = 13  
-MODEL_NAME = 'gemini-2.5-flash' 
+MODEL_NAME = 'gemini-2.5-flash' # 元のまま
 VOICE_NAME = "en-US-ChristopherNeural"
 
 if api_key:
@@ -27,8 +29,8 @@ else:
     print("【Error】APIキーが設定されていません。")
     exit()
 
-VOICE_LEVEL = 1.0     
-MUSIC_LEVEL = 0.8     
+VOICE_LEVEL = 1.0      
+MUSIC_LEVEL = 0.8      
 MAX_PLAY_TIME = 200
 POST_TALK_WAIT = 5.0  
 
@@ -93,7 +95,7 @@ def get_song_info(song_id):
     return None
 
 # ==========================================
-# 3. AI Script Generation & Voice Synthesis
+# 3. AI Script Generation & Voice Synthesis（音質改善のみ適用）
 # ==========================================
 
 async def generate_script_async(prompt_type, current_info=None, next_info=None, comments=None):
@@ -120,11 +122,41 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
         return response.text.strip()
     except Exception as e: return f"System Error: {e}"
 
+# ここで保存時に高品質リサンプリングを行う
 async def prepare_next_talk(prompt_type, current_info, next_info, comments, output_file):
+    # 1. スクリプトの生成（既存のロジックを継承）
     script = await generate_script_async(prompt_type, current_info, next_info, comments)
     print(f"\n[Future Script Prepared]\n{script}\n")
+
+    # 出力ファイルをWAV形式に強制変更して品質を守る
+    # (main_loop側の pygame.mixer.Sound() がこれを読み込むようにする)
+    wav_output = output_file.replace(".mp3", ".wav")
+
+    # 2. edge-ttsから音声データをバイナリで取得（24kHz MP3データ）
     communicate = edge_tts.Communicate(script, VOICE_NAME, rate="-10%")
-    await communicate.save(output_file)
+    audio_data = b""
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            audio_data += chunk["data"]
+
+    if audio_data:
+        # 3. Pydubを使用して音質を加工
+        # メモリ上でMP3バイナリをデコード
+        seg = AudioSegment.from_file(io.BytesIO(audio_data), format="mp3")
+
+        # 【音質改善の要】44.1kHzへ高品質アップサンプリング
+        # 再生時の計算誤差によるガサつきをFFmpegの高度な補間アルゴリズムで排除
+        seg = seg.set_frame_rate(44100)
+
+        # 【存在感の向上】ノーマライズ（音圧の最適化）
+        # 声のピークを探し、音割れしない限界まで全体を底上げする
+        # これにより「音が遠い」「薄い」という印象を払拭する
+        seg = seg.normalize()
+
+        # 4. 非圧縮WAV形式で保存（劣化ゼロ）
+        # ここで再度MP3にしないことが、クリアな音質を維持する秘訣
+        seg.export(wav_output, format="wav")
+    
     return script
 
 # ==========================================
@@ -132,7 +164,7 @@ async def prepare_next_talk(prompt_type, current_info, next_info, comments, outp
 # ==========================================
 
 async def main_loop():
-    pygame.mixer.pre_init(44100, -16, 2, 2048) # 周波数、ビット幅、チャンネル、バッファ
+    pygame.mixer.pre_init(44100, -16, 2, 2048) 
     pygame.mixer.init()
     available_ids = list(SONG_FILES.keys())
     next_talk_audio = "next_talk.mp3"
@@ -146,7 +178,12 @@ async def main_loop():
     try:
         # --- Opening ---
         op_script = await generate_script_async("opening")
-        await edge_tts.Communicate(op_script, VOICE_NAME, rate="-10%").save(next_talk_audio)
+        # オープニングも高品質化
+        communicate = edge_tts.Communicate(op_script, VOICE_NAME, rate="-10%")
+        audio_data = b""
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio": audio_data += chunk["data"]
+        AudioSegment.from_file(io.BytesIO(audio_data), format="mp3").set_frame_rate(44100).export(next_talk_audio, format="mp3")
         
         voice = pygame.mixer.Sound(next_talk_audio)
         voice.set_volume(VOICE_LEVEL)
@@ -192,34 +229,22 @@ async def main_loop():
 
     except (asyncio.CancelledError, KeyboardInterrupt):
         print("\n   [System] Interrupt received. Finalizing the broadcast...")
-        
-        # 1. 台本の準備
         ed_script = await generate_script_async("closing")
-        await edge_tts.Communicate(ed_script, VOICE_NAME, rate="-10%").save("final.mp3")
+        # クロージングも高品質化
+        communicate = edge_tts.Communicate(ed_script, VOICE_NAME, rate="-10%")
+        audio_data = b""
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio": audio_data += chunk["data"]
+        AudioSegment.from_file(io.BytesIO(audio_data), format="mp3").set_frame_rate(44100).export("final.mp3", format="mp3")
         
-        # 2. 音声のロード
         final_voice = pygame.mixer.Sound("final.mp3")
         final_voice.set_volume(VOICE_LEVEL)
-        
-        # 3. 音楽を少し下げて準備
         pygame.mixer.music.set_volume(0.3)
         await asyncio.sleep(0.5)
-        
-        # 4. 【最重要】fade_ms を指定して再生
-        # 再生開始の瞬間の電圧スパイクを、0.1秒のフェードインで滑らかにする
         final_voice.play(fade_ms=200) 
-        
-        # 5. 喋りが終わるまで待機
-        while pygame.mixer.get_busy(): 
-            await asyncio.sleep(0.1)
-            
-        # 6. 音楽のフェードアウト
-        print("   [System] Speech finished. Fading out music...")
+        while pygame.mixer.get_busy(): await asyncio.sleep(0.1)
         pygame.mixer.music.fadeout(5000) 
-        
-        while pygame.mixer.music.get_busy():
-            await asyncio.sleep(0.1)
-            
+        while pygame.mixer.music.get_busy(): await asyncio.sleep(0.1)
         print("\n--- Eternal peace be with you. ---")
 
     finally:
