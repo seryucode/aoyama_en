@@ -2,7 +2,7 @@ import asyncio
 import edge_tts
 
 VOICES = {
-    "Andrew": "en-US-AndrewNeural",
+    "Ryan": "en-GB-RyanNeural",
     "Christopher": "en-US-ChristopherNeural",
     "Steffan": "en-US-SteffanNeural"
 }

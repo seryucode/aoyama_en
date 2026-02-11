@@ -4,11 +4,10 @@ import random
 import glob
 import re
 import csv
-import io
 import pygame
 import asyncio
 import edge_tts
-from pydub import AudioSegment # 追加
+from datetime import datetime, timezone, timedelta
 from google import genai
 
 # ==========================================
@@ -16,11 +15,17 @@ from google import genai
 # ==========================================
 api_key = os.environ.get("GEMINI_API_KEY")
 
+# --- 選曲モード設定 ---
+RANDOM_MODE = False  # True: 時間を無視してランダム / False: 時間に合わせる
+UTC_OFFSET = 9      # 日本なら 9
+BOOST_2 = 10.0      # play_flag=2 の時の倍率
+# --------------------
+
 MUSIC_FOLDER = r"D:/Music"  
 CSV_PATH = "musicdata.csv" 
 VOICEVOX_URL = "http://127.0.0.1:50021"
 SPEAKER_ID = 13  
-MODEL_NAME = 'gemini-2.5-flash' # 元のまま
+MODEL_NAME = 'gemini-2.5-flash' 
 VOICE_NAME = "en-US-ChristopherNeural"
 
 if api_key:
@@ -68,6 +73,9 @@ def load_song_database():
                 try:
                     key_id = int(row['id'])
                     song_db[key_id] = {
+                        'play_flag': int(row.get('play_flag', 0)),
+                        'time_scale': float(row.get('time_scale', 5)),
+                        'last_played': row.get('last_played', ''),
                         'title': row.get('title', 'Unknown Title'),
                         'composer': row.get('composer', 'Unknown Composer'),
                         'performer': row.get('performer', 'Unknown Performer'),
@@ -84,6 +92,65 @@ def scan_music_files():
         if match: files_map[int(match.group(1))] = path
     return files_map
 
+# --- 知的選曲エンジンの核 ---
+
+def get_now_jst():
+    return datetime.now(timezone(timedelta(hours=UTC_OFFSET)))
+
+def get_target_scale():
+    now = get_now_jst()
+    seconds = now.hour * 3600 + now.minute * 60 + now.second
+    return 1.0 + (seconds / 86400.0) * 8.0
+
+def select_next_song_weighted(song_db, available_ids):
+    t_target = get_target_scale()
+    now_ts = get_now_jst().timestamp()
+    
+    candidates, weights = [], []
+    
+    for sid in available_ids:
+        song = song_db.get(sid)
+        if not song or song.get('play_flag', 0) == 0: continue
+        
+        p_logic = BOOST_2 if song.get('play_flag') == 2 else 1.0
+        s_val = song.get('time_scale', 5.0)
+        
+        lp = song.get('last_played', '')
+        time_diff = (now_ts - datetime.fromisoformat(lp).timestamp()) if lp else 86400.0
+        
+        if RANDOM_MODE:
+            w = p_logic * time_diff
+        else:
+            dist = abs(t_target - s_val)
+            w = (p_logic / ((dist + 1.0) ** 10)) * time_diff
+            if dist > 3.0:
+                w *= 0.000001 
+        
+        candidates.append(sid)
+        weights.append(w)
+        
+    if not candidates: return random.choice(available_ids)
+    return random.choices(candidates, weights=weights, k=1)[0]
+
+def mark_as_played(song_id):
+    now_str = get_now_jst().isoformat()
+    if song_id in SONG_DB:
+        SONG_DB[song_id]['last_played'] = now_str
+    
+    if not os.path.exists(CSV_PATH): return
+    rows = []
+    with open(CSV_PATH, 'r', encoding='utf-8-sig') as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames
+        for row in reader:
+            if int(row['id']) == song_id: row['last_played'] = now_str
+            rows.append(row)
+    with open(CSV_PATH, 'w', encoding='utf-8-sig', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader(); writer.writerows(rows)
+
+# ----------------------------
+
 SONG_DB = load_song_database()
 SONG_FILES = scan_music_files()
 
@@ -95,7 +162,7 @@ def get_song_info(song_id):
     return None
 
 # ==========================================
-# 3. AI Script Generation & Voice Synthesis（音質改善のみ適用）
+# 3. AI Script Generation & Voice Synthesis
 # ==========================================
 
 async def generate_script_async(prompt_type, current_info=None, next_info=None, comments=None):
@@ -115,49 +182,35 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
         else:
             instruction = f"Briefly reflect on {c_text}. Then provide a sophisticated introduction for {n_text}. Approx 200 words."
 
-    prompt = f"{persona_setting}\n\n{comment_part}\n\n[Request]\n{instruction}\n\n*Write in elegant English only."
+    # ログ用の日本語訳を求める指示を追加
+    instruction += "\nAfter the English script, add a brief Japanese translation/summary for the console log. Prefix it with '[LOG]'."
+
+    prompt = f"{persona_setting}\n\n{comment_part}\n\n[Request]\n{instruction}\n\n*Write in elegant English only, except for the section after [LOG]."
 
     try:
         response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
         return response.text.strip()
     except Exception as e: return f"System Error: {e}"
 
-# ここで保存時に高品質リサンプリングを行う
 async def prepare_next_talk(prompt_type, current_info, next_info, comments, output_file):
-    # 1. スクリプトの生成（既存のロジックを継承）
-    script = await generate_script_async(prompt_type, current_info, next_info, comments)
-    print(f"\n[Future Script Prepared]\n{script}\n")
-
-    # 出力ファイルをWAV形式に強制変更して品質を守る
-    # (main_loop側の pygame.mixer.Sound() がこれを読み込むようにする)
-    wav_output = output_file.replace(".mp3", ".wav")
-
-    # 2. edge-ttsから音声データをバイナリで取得（24kHz MP3データ）
-    communicate = edge_tts.Communicate(script, VOICE_NAME, rate="-10%")
-    audio_data = b""
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            audio_data += chunk["data"]
-
-    if audio_data:
-        # 3. Pydubを使用して音質を加工
-        # メモリ上でMP3バイナリをデコード
-        seg = AudioSegment.from_file(io.BytesIO(audio_data), format="mp3")
-
-        # 【音質改善の要】44.1kHzへ高品質アップサンプリング
-        # 再生時の計算誤差によるガサつきをFFmpegの高度な補間アルゴリズムで排除
-        seg = seg.set_frame_rate(44100)
-
-        # 【存在感の向上】ノーマライズ（音圧の最適化）
-        # 声のピークを探し、音割れしない限界まで全体を底上げする
-        # これにより「音が遠い」「薄い」という印象を払拭する
-        seg = seg.normalize()
-
-        # 4. 非圧縮WAV形式で保存（劣化ゼロ）
-        # ここで再度MP3にしないことが、クリアな音質を維持する秘訣
-        seg.export(wav_output, format="wav")
+    # 台本の生成
+    full_response = await generate_script_async(prompt_type, current_info, next_info, comments)
     
-    return script
+    # [LOG] タグで分割（大文字小文字を問わず分割）
+    parts = re.split(r'\[LOG\]', full_response, flags=re.IGNORECASE)
+    speech_text = parts[0].strip()
+    log_text = parts[1].strip() if len(parts) > 1 else "No translation available."
+
+    # ログ画面にだけ日本語を出す
+    print("-" * 30)
+    print(f"[Future Speech]\n{speech_text}")
+    print(f"\n[Translation Log]\n{log_text}")
+    print("-" * 30)
+
+    # 音声合成は英語部分のみを使用
+    communicate = edge_tts.Communicate(speech_text, VOICE_NAME, rate="-10%")
+    await communicate.save(output_file)
+    return speech_text
 
 # ==========================================
 # 4. Graceful Execution Engine
@@ -173,26 +226,29 @@ async def main_loop():
         print("音楽ファイルが見つかりません。")
         return
 
-    print("\n† Midnight FM: Silas Requiem Online (Gemini 2.5 Flash / Parallel) †\n")
+    mode_text = "RANDOM" if RANDOM_MODE else "TIME-SYNC"
+    print(f"\n† Midnight FM: Silas Requiem Online ({mode_text} / UTC+{UTC_OFFSET}) †\n")
 
     try:
-        # --- Opening ---
-        op_script = await generate_script_async("opening")
-        # オープニングも高品質化
-        communicate = edge_tts.Communicate(op_script, VOICE_NAME, rate="-10%")
-        audio_data = b""
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio": audio_data += chunk["data"]
-        AudioSegment.from_file(io.BytesIO(audio_data), format="mp3").set_frame_rate(44100).export(next_talk_audio, format="mp3")
+        # オープニングもログ分割に対応させるため修正
+        op_full_response = await generate_script_async("opening")
+        op_parts = re.split(r'\[LOG\]', op_full_response, flags=re.IGNORECASE)
+        op_speech = op_parts[0].strip()
+        op_log = op_parts[1].strip() if len(op_parts) > 1 else ""
+        
+        if op_log: print(f"\n[System Log: Opening Translation]\n{op_log}\n")
+        
+        await edge_tts.Communicate(op_speech, VOICE_NAME, rate="-10%").save(next_talk_audio)
         
         voice = pygame.mixer.Sound(next_talk_audio)
         voice.set_volume(VOICE_LEVEL)
         voice.play()
         while pygame.mixer.get_busy(): await asyncio.sleep(0.1)
 
-        current_id = random.choice(available_ids)
+        current_id = select_next_song_weighted(SONG_DB, available_ids)
 
         while True:
+            mark_as_played(current_id)
             current_info = get_song_info(current_id)
             sound_temp = pygame.mixer.Sound(SONG_FILES[current_id])
             duration = sound_temp.get_length()
@@ -202,9 +258,7 @@ async def main_loop():
             pygame.mixer.music.set_volume(MUSIC_LEVEL)
             pygame.mixer.music.play()
 
-            next_id = random.choice(available_ids)
-            while next_id == current_id and len(available_ids) > 1:
-                next_id = random.choice(available_ids)
+            next_id = select_next_song_weighted(SONG_DB, available_ids)
             next_info = get_song_info(next_id)
             
             prep_task = asyncio.create_task(
@@ -228,20 +282,17 @@ async def main_loop():
             current_id = next_id
 
     except (asyncio.CancelledError, KeyboardInterrupt):
-        print("\n   [System] Interrupt received. Finalizing the broadcast...")
-        ed_script = await generate_script_async("closing")
-        # クロージングも高品質化
-        communicate = edge_tts.Communicate(ed_script, VOICE_NAME, rate="-10%")
-        audio_data = b""
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio": audio_data += chunk["data"]
-        AudioSegment.from_file(io.BytesIO(audio_data), format="mp3").set_frame_rate(44100).export("final.mp3", format="mp3")
+        print("\n   [System] Finalizing...")
+        ed_full = await generate_script_async("closing")
+        ed_parts = re.split(r'\[LOG\]', ed_full, flags=re.IGNORECASE)
+        ed_speech = ed_parts[0].strip()
         
+        await edge_tts.Communicate(ed_speech, VOICE_NAME, rate="-10%").save("final.mp3")
         final_voice = pygame.mixer.Sound("final.mp3")
         final_voice.set_volume(VOICE_LEVEL)
         pygame.mixer.music.set_volume(0.3)
         await asyncio.sleep(0.5)
-        final_voice.play(fade_ms=200) 
+        final_voice.play(fade_ms=300) 
         while pygame.mixer.get_busy(): await asyncio.sleep(0.1)
         pygame.mixer.music.fadeout(5000) 
         while pygame.mixer.music.get_busy(): await asyncio.sleep(0.1)
