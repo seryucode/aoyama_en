@@ -143,23 +143,30 @@ def select_next_song_weighted(song_db, available_ids):
     return random.choices(candidates, weights=weights, k=1)[0]
 
 def mark_as_played(song_id):
+    """ファイルへの書き込みを排除し、メモリ上のデータベースのみを更新する"""
     now_str = get_now_jst().isoformat()
     if song_id in SONG_DB:
         SONG_DB[song_id]['last_played'] = now_str
+
+def save_song_database():
+    """蓄積されたメモリ上の情報を、一度だけファイルへ記録する"""
+    if not os.path.exists(CSV_PATH) or not SONG_DB:
+        return
     
-    if not os.path.exists(CSV_PATH): return
-    rows = []
+    # 既存のヘッダーを取得するために一度読み込む
     fieldnames = []
     with open(CSV_PATH, 'r', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames
-        for row in reader:
-            if int(row['id']) == song_id: row['last_played'] = now_str
-            rows.append(row)
+
+    # まとめて書き出し
     with open(CSV_PATH, 'w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(rows)
+        for sid, info in SONG_DB.items():
+            row = {'id': sid}
+            row.update(info)
+            writer.writerow(row)
 
 # ----------------------------
 
@@ -285,6 +292,7 @@ async def main_loop():
         while pygame.mixer.get_busy(): await asyncio.sleep(0.1)
 
     finally:
+        save_song_database()  # プログラム終了時に、一度だけ記録を刻む
         pygame.mixer.quit()
         if os.path.exists(next_talk_audio):
             try: os.remove(next_talk_audio)
