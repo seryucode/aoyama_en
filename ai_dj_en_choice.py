@@ -34,10 +34,10 @@ else:
     print("【Error】APIキーが設定されていません。")
     exit()
 
-VOICE_LEVEL = 1.0
+VOICE_LEVEL = 0.95
 MUSIC_LEVEL = 0.8
 MAX_PLAY_TIME = 200
-POST_TALK_WAIT = 5.0
+POST_TALK_WAIT = 4.0
 
 # ==========================================
 # 2. File & Metadata Management
@@ -47,7 +47,7 @@ def load_persona():
     if os.path.exists("persona.txt"):
         with open("persona.txt", "r", encoding="utf-8") as f:
             return f.read().strip()
-    return "You are Silas Requiem, a sophisticated AI DJ for a nocturnal classical program. Use elegant, philosophical English."
+    return "You are Silas Requiem, a sophisticated AI DJ for a nocturnal classical program. Use elegant, philosophical English only."
 
 def get_and_clear_comments():
     content = ""
@@ -108,7 +108,7 @@ def get_now_jst():
 def get_target_scale():
     now = get_now_jst()
     seconds = now.hour * 3600 + now.minute * 60 + now.second
-    return 1.0 + (seconds / 86400.0) * 8.0
+    return 1.0 + (seconds / 86400.0) * 3.0
 
 def select_next_song_weighted(song_db, available_ids):
     t_target = get_target_scale()
@@ -175,19 +175,19 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
     comment_part = ""
 
     if prompt_type == "opening":
-        instruction = "Write a program opening. Greet listeners in the silence of the night. Approx 100 words. Do NOT describe sound effects (e.g. 'music starts'). Write ONLY the spoken words."
+        instruction = "Write a program opening. Greet listeners. Approx 100 words. Do NOT describe sound effects (e.g. 'music starts'). Write ONLY the spoken English words."
     elif prompt_type == "closing":
-        instruction = "Write a program closing. Bid farewell to the day. Approx 100 words. Do NOT describe sound effects. Write ONLY the spoken words."
+        instruction = "Write a program closing. Bid farewell to the day. Approx 100 words. Do NOT describe sound effects. Write ONLY the spoken English words."
     else:
         c_text = f"'{current_info['title']}' by {current_info['composer']}, performed by {current_info['performer']}"
         n_text = f"'{next_info['title']}' by {next_info['composer']}, performed by {next_info['performer']}"
         if comments:
             comment_part = f"\n【Messages from Unpurified Souls】\n{comments}\n"
-            instruction = (f"Briefly reflect on {c_text}. Then, address one listener's message. "
+            instruction = (f"Briefly reflect on {c_text}. Then, summarize the essence of one listener's message and offer a warm, thoughtful response that provides genuine comfort. "
                            f"IMPORTANT: The speech must be 100% English. "
                            f"Finally, introduce {n_text}. "
-                           "Approx 200 words. Do NOT include stage directions or sound descriptions (e.g., '(music fades)'). "
-                           "Write ONLY the spoken words. After the script, add a brief Japanese translation "
+                           "Approx 150 words. Do NOT include stage directions or sound descriptions (e.g., '(music fades)'). "
+                           "Write ONLY the spoken English words. After the script, add a brief Japanese translation "
                            "of your reply at the very end, prefixed with '[LOG]'.")
         else:
             instruction = f"Briefly reflect on {c_text}. Then provide a sophisticated introduction for {n_text}. Approx 200 words. Do NOT include sound effects. Write ONLY the spoken words."
@@ -232,7 +232,7 @@ async def main_loop():
         return
 
     mode_text = "RANDOM" if RANDOM_MODE else "TIME-SYNC"
-    print(f"\n† Midnight FM: Silas Requiem Online ({mode_text} / UTC+{UTC_OFFSET}) †\n")
+    print(f"\n† Silas Requiem Online ({mode_text} / UTC+{UTC_OFFSET}) †\n")
 
     try:
         op_script = await generate_script_async("opening")
