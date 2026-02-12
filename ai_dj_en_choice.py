@@ -36,7 +36,7 @@ else:
 
 VOICE_LEVEL = 0.95
 MUSIC_LEVEL = 0.8
-MAX_PLAY_TIME = 120
+MAX_PLAY_TIME = 200
 POST_TALK_WAIT = 3.0
 
 # ==========================================
@@ -275,9 +275,6 @@ async def main_loop():
                 prepare_next_talk("talk", current_info, next_info, get_and_clear_comments(), next_talk_audio)
             )
 
-            # --- 通常ループの理：曲が終わるまで待機する ---
-            await prep_task  # 台本準備の完了を待つ
-
             # 音楽が再生中である限り、ここで足を止める
             start_time = time.time()
             while pygame.mixer.music.get_busy():
@@ -289,6 +286,8 @@ async def main_loop():
             # 曲が終了、あるいは中断されたので音楽を止める
             pygame.mixer.music.fadeout(2000)
             await asyncio.sleep(2)
+
+            await prep_task  # 台本準備の完了を待つ
 
             # 静寂の中で語りを開始する
             print(f"   [Play] Silas Requiem: Speaking after the music...")
