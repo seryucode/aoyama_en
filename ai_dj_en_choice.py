@@ -36,8 +36,8 @@ else:
 
 VOICE_LEVEL = 0.95
 MUSIC_LEVEL = 0.8
-MAX_PLAY_TIME = 200
-POST_TALK_WAIT = 4.0
+MAX_PLAY_TIME = 120
+POST_TALK_WAIT = 3.0
 
 # ==========================================
 # 2. File & Metadata Management
@@ -190,12 +190,16 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
         n_text = f"'{next_info['title']}' by {next_info['composer']}, performed by {next_info['performer']}"
         if comments:
             comment_part = f"\n【Messages from Unpurified Souls】\n{comments}\n"
-            instruction = (f"Briefly reflect on {c_text}. Then, summarize the essence of one listener's message and offer a warm, thoughtful response that provides genuine comfort. "
-                           f"IMPORTANT: The speech must be 100% English. "
-                           f"Finally, introduce {n_text}. "
-                           "Approx 150 words. Do NOT include stage directions or sound descriptions (e.g., '(music fades)'). "
-                           "Write ONLY the spoken English words. After the script, add a brief Japanese translation "
-                           "of your reply at the very end, prefixed with '[LOG]'.")
+            instruction = (
+                f"[SPEECH SECTION]\n"
+                f"Write a 150-word script. Reflect on {c_text}. "
+                f"Then, summarize the essence of one listener's message and offer a warm, thoughtful response that provides genuine comfort. "
+                f"Finally, introduce {n_text}.\n"
+                f"CRITICAL: Use ONLY English. NO other languages, and NO non-English characters are allowed in this section. Do NOT use numbering, bullet points, or separators.\n\n"
+                f"[LOG SECTION]\n"
+                f"Provide a brief Japanese translation of your response to the listener, prefixed with '[LOG]'.\n\n"
+                f"Messages from Unpurified Souls:\n{comments if comments else 'None'}"
+            )
         else:
             instruction = f"Briefly reflect on {c_text}. Then provide a sophisticated introduction for {n_text}. Approx 200 words. Do NOT include sound effects. Write ONLY the spoken words."
 
@@ -242,6 +246,7 @@ async def main_loop():
     print(f"\n† Silas Requiem Online ({mode_text} / UTC+{UTC_OFFSET}) †\n")
 
     try:
+        # --- オープニング ---
         op_script = await generate_script_async("opening")
         print(f"[Opening Script]\n{op_script}\n")
         await edge_tts.Communicate(op_script, VOICE_NAME, rate="-10%").save(next_talk_audio)
@@ -262,6 +267,7 @@ async def main_loop():
             pygame.mixer.music.load(SONG_FILES[current_id])
             pygame.mixer.music.set_volume(MUSIC_LEVEL); pygame.mixer.music.play()
 
+            # 次の曲の選定と台本の準備
             next_id = select_next_song_weighted(SONG_DB, available_ids)
             next_info = get_song_info(next_id)
             
@@ -269,30 +275,58 @@ async def main_loop():
                 prepare_next_talk("talk", current_info, next_info, get_and_clear_comments(), next_talk_audio)
             )
 
-            play_limit = min(duration, MAX_PLAY_TIME) if MAX_PLAY_TIME > 0 else duration
-            await asyncio.sleep(play_limit - 2)
+            # --- 通常ループの理：曲が終わるまで待機する ---
+            await prep_task  # 台本準備の完了を待つ
 
-            pygame.mixer.music.fadeout(2000); await asyncio.sleep(2); await prep_task 
+            # 音楽が再生中である限り、ここで足を止める
+            start_time = time.time()
+            while pygame.mixer.music.get_busy():
+                # MAX_PLAY_TIMEによる制限がある場合の処理
+                if MAX_PLAY_TIME > 0 and (time.time() - start_time) > MAX_PLAY_TIME:
+                    break
+                await asyncio.sleep(0.1)
 
-            print(f"   [Play] Silas Requiem: Speaking...")
+            # 曲が終了、あるいは中断されたので音楽を止める
+            pygame.mixer.music.fadeout(2000)
+            await asyncio.sleep(2)
+
+            # 静寂の中で語りを開始する
+            print(f"   [Play] Silas Requiem: Speaking after the music...")
             voice = pygame.mixer.Sound(next_talk_audio)
             voice.set_volume(VOICE_LEVEL); voice.play()
-            while pygame.mixer.get_busy(): await asyncio.sleep(0.1)
+
+            while pygame.mixer.get_busy(): 
+                await asyncio.sleep(0.1)
             
             await asyncio.sleep(POST_TALK_WAIT)
             current_id = next_id
 
     except (asyncio.CancelledError, KeyboardInterrupt):
+        # --- 終幕（クロージング）の理：余韻と消滅 ---
         print("\n   [System] Finalizing...")
         ed_script = await generate_script_async("closing")
-        print(f"[Closing Script]\n{ed_script}")
+        
         await edge_tts.Communicate(ed_script, VOICE_NAME, rate="-10%").save("final.mp3")
+        
+        # 音楽を消さず、音量を絞って語りを重ねる（ダッキング）
+        pygame.mixer.music.set_volume(0.2)
+        await asyncio.sleep(0.5) 
+        
         final_voice = pygame.mixer.Sound("final.mp3")
         final_voice.set_volume(VOICE_LEVEL); final_voice.play()
-        while pygame.mixer.get_busy(): await asyncio.sleep(0.1)
+        
+        # 語りが終わるまで待つ
+        while pygame.mixer.get_busy(): 
+            await asyncio.sleep(0.1)
+
+        # 語り終えた後、3秒かけて音楽を無へと還す（フェードアウト）
+        print("   [System] Fading out music...")
+        pygame.mixer.music.fadeout(3000)
+        await asyncio.sleep(3.0)
 
     finally:
-        save_song_database()  # プログラム終了時に、一度だけ記録を刻む
+        # 最後に一度だけ、不完全な世界の記録を刻む
+        save_song_database()
         pygame.mixer.quit()
         if os.path.exists(next_talk_audio):
             try: os.remove(next_talk_audio)
