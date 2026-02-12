@@ -301,25 +301,32 @@ async def main_loop():
             current_id = next_id
 
     except (asyncio.CancelledError, KeyboardInterrupt):
-        # --- 終幕（クロージング）の理：余韻と消滅 ---
         print("\n   [System] Finalizing...")
+
         ed_script = await generate_script_async("closing")
-        
-        await edge_tts.Communicate(ed_script, VOICE_NAME, rate="-10%").save("final.mp3")
-        
-        # 音楽を消さず、音量を絞って語りを重ねる（ダッキング）
-        pygame.mixer.music.set_volume(0.2)
-        await asyncio.sleep(0.5) 
-        
-        final_voice = pygame.mixer.Sound("final.mp3")
-        final_voice.set_volume(VOICE_LEVEL); final_voice.play()
-        
-        # 語りが終わるまで待つ
-        while pygame.mixer.get_busy(): 
+        await edge_tts.Communicate(
+            ed_script,
+            VOICE_NAME,
+            rate="-10%"
+        ).save("final.mp3")
+
+        # BGMを小さくする（止めない）
+        for v in [0.6, 0.5, 0.4]:
+            pygame.mixer.music.set_volume(v)
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.5)
+
+        # closing音声を上に重ねる
+        closing_voice = pygame.mixer.Sound("final.mp3")
+        closing_voice.set_volume(0.5)
+        await asyncio.sleep(0.1)
+        closing_voice.play()
+
+        # 声が終わるまで待つ
+        while pygame.mixer.get_busy():
             await asyncio.sleep(0.1)
 
-        # 語り終えた後、3秒かけて音楽を無へと還す（フェードアウト）
-        print("   [System] Fading out music...")
+        # 声が終わったらBGMをフェードアウト
         pygame.mixer.music.fadeout(3000)
         await asyncio.sleep(3.0)
 
