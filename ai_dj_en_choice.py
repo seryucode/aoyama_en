@@ -130,7 +130,7 @@ def select_next_song_weighted(song_db, available_ids):
         except:
             time_diff = 86400.0
         
-        if RANDOM_MODE:
+        if RANDOM_MODE: 
             w = p_logic * time_diff
         else:
             # 指定されたスケールと曲のスケールの距離を算出
@@ -143,7 +143,7 @@ def select_next_song_weighted(song_db, available_ids):
         candidates.append(sid)
         weights.append(w)
         
-    if not candidates: return random.choice(available_ids)
+    if not candidates: return random.choice(available_ids) # 重み付け選曲ができない場合はランダム選曲
     return random.choices(candidates, weights=weights, k=1)[0]
 
 def mark_as_played(song_id):
@@ -185,10 +185,14 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
     persona_setting = load_persona()
     comment_part = ""
 
+    is_seasonal = (prompt_type in ["opening", "closing"]) or (random.random() < 0.3) # 30%の確率で季節の挨拶を含める
+    now_local = get_now_jst()  # 現在時刻
+    time_context = f"Briefly touch upon the feeling of this hour: {now_local.strftime('%Y-%m-%d %H')} (UTC{UTC_OFFSET:+}). Do not mention exact time." if is_seasonal else ""
+    
     if prompt_type == "opening":
-        instruction = "Write a program opening. Greet listeners. Approx 100 words. Do NOT describe sound effects (e.g. 'music starts'). Write ONLY the spoken English words."
+        instruction = f"Write a program opening. Greet listeners. {time_context} Approx 100 words. Do NOT describe sound effects (e.g. 'music starts'). Write ONLY the spoken English words."
     elif prompt_type == "closing":
-        instruction = "Write a program closing. Bid farewell to the day. Approx 100 words. Do NOT describe sound effects. Write ONLY the spoken English words."
+        instruction = f"Write a program closing. Bid farewell to the day. {time_context} Approx 100 words. Do NOT describe sound effects. Write ONLY the spoken English words."
     else:
         c_text = f"'{current_info['title']}' by {current_info['composer']}, performed by {current_info['performer']}"
         n_text = f"'{next_info['title']}' by {next_info['composer']}, performed by {next_info['performer']}"
@@ -205,7 +209,7 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
                 f"Messages from Unpurified Souls:\n{comments if comments else 'None'}"
             )
         else:
-            instruction = f"Briefly reflect on {c_text}. Then provide a sophisticated introduction for {n_text}. Approx 200 words. Do NOT include sound effects. Write ONLY the spoken words."
+            instruction = f"Briefly reflect on {c_text}. {time_context} Then provide a sophisticated introduction for {n_text}. Approx 200 words. Do NOT include sound effects. Write ONLY the spoken words."
 
     prompt = f"{persona_setting}\n\n{comment_part}\n\n[Request]\n{instruction}\n\n*Write in elegant English only (except after [LOG] if requested). Strictly NO sound effects or stage directions."
 
@@ -322,6 +326,8 @@ async def main_loop():
 
         # 幕引きの言葉を準備する
         ed_script = await generate_script_async("closing")
+        print(f"\n[Closing Script]\n{ed_script}")
+
         final_audio = "final.mp3"
         await edge_tts.Communicate(
             ed_script,
@@ -331,12 +337,12 @@ async def main_loop():
 
         # 1. 曲を流したまま、BGMの音量を「少し小さく」する
         # ここで急激に下げればまた雑音の原因になる。
-        pygame.mixer.music.set_volume(MUSIC_LEVEL * 0.4)
+        pygame.mixer.music.set_volume(MUSIC_LEVEL * 0.5)
         
         # 2. 最後の音声を入れる
         if os.path.exists(final_audio):
             closing_voice = pygame.mixer.Sound(final_audio)
-            closing_voice.set_volume(VOICE_LEVEL)
+            closing_voice.set_volume(VOICE_LEVEL * 0.7)
             # 再生中のチャネルを保持し、その終了を監視する
             voice_channel = closing_voice.play()
 
