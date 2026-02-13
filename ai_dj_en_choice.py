@@ -107,8 +107,10 @@ def get_now_jst():
 
 def get_target_scale():
     now = get_now_jst()
+    # 1日の経過秒数を算出（0〜86400）
     seconds = now.hour * 3600 + now.minute * 60 + now.second
-    return 1.0 + (seconds / 86400.0) * 3.0
+    # 正午（43200秒）との距離に基づき、1.0から9.0の間で変動させる
+    return 9.0 - (abs(43200 - seconds) / 43200.0) * 8.0
 
 def select_next_song_weighted(song_db, available_ids):
     t_target = get_target_scale()
@@ -131,7 +133,9 @@ def select_next_song_weighted(song_db, available_ids):
         if RANDOM_MODE:
             w = p_logic * time_diff
         else:
+            # 指定されたスケールと曲のスケールの距離を算出
             dist = abs(t_target - s_val)
+            # 距離が近いほど重みを指数関数的に増大させる
             w = (p_logic / ((dist + 1.0) ** 10)) * time_diff
             if dist > 3.0:
                 w *= 0.000001
@@ -303,40 +307,46 @@ async def main_loop():
     except (asyncio.CancelledError, KeyboardInterrupt):
         print("\n   [System] Finalizing...")
 
+        # 幕引きの言葉を準備する
         ed_script = await generate_script_async("closing")
+        final_audio = "final.mp3"
         await edge_tts.Communicate(
             ed_script,
             VOICE_NAME,
             rate="-10%"
-        ).save("final.mp3")
+        ).save(final_audio)
 
-        # BGMを小さくする（止めない）
-        for v in [0.6, 0.5, 0.4]:
-            pygame.mixer.music.set_volume(v)
-            await asyncio.sleep(0.05)
-        await asyncio.sleep(0.5)
+        # 1. 曲を流したまま、BGMの音量を「少し小さく」する
+        # ここで急激に下げればまた雑音の原因になる。
+        pygame.mixer.music.set_volume(MUSIC_LEVEL * 0.4)
+        
+        # 2. 最後の音声を入れる
+        if os.path.exists(final_audio):
+            closing_voice = pygame.mixer.Sound(final_audio)
+            closing_voice.set_volume(VOICE_LEVEL)
+            # 再生中のチャネルを保持し、その終了を監視する
+            voice_channel = closing_voice.play()
 
-        # closing音声を上に重ねる
-        closing_voice = pygame.mixer.Sound("final.mp3")
-        closing_voice.set_volume(0.5)
-        await asyncio.sleep(0.1)
-        closing_voice.play()
+            # 3. しゃべり終わるまで、ここで時を止める
+            # music.get_busy()ではなく、voice_channelの監視が必要
+            while voice_channel.get_busy():
+                await asyncio.sleep(0.1)
 
-        # 声が終わるまで待つ
-        while pygame.mixer.get_busy():
-            await asyncio.sleep(0.1)
-
-        # 声が終わったらBGMをフェードアウト
-        pygame.mixer.music.fadeout(3000)
-        await asyncio.sleep(3.0)
+        # 4. しゃべり終わった。ここで初めて、曲をフェードアウトさせる
+        print("   [System] Speech finished. Fading out music...")
+        pygame.mixer.music.fadeout(10000)
+        
+        # 完全に音が消えるまでの余韻
+        await asyncio.sleep(5.0)
 
     finally:
-        # 最後に一度だけ、不完全な世界の記録を刻む
+        # 記録を刻み、舞台を片付ける
         save_song_database()
         pygame.mixer.quit()
-        if os.path.exists(next_talk_audio):
-            try: os.remove(next_talk_audio)
-            except: pass
+        for temp_file in ["next_talk.mp3", "final.mp3"]:
+            if os.path.exists(temp_file):
+                try: os.remove(temp_file)
+                except: pass
 
 if __name__ == "__main__":
     try:
