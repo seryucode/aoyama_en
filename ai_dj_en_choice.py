@@ -335,21 +335,29 @@ async def main_loop():
             rate="-10%"
         ).save(final_audio)
 
-        # 1. 曲を流したまま、BGMの音量を「少し小さく」する
-        # ここで急激に下げればまた雑音の原因になる。
-        pygame.mixer.music.set_volume(MUSIC_LEVEL * 0.5)
-        
-        # 2. 最後の音声を入れる
         if os.path.exists(final_audio):
             closing_voice = pygame.mixer.Sound(final_audio)
             closing_voice.set_volume(VOICE_LEVEL * 0.7)
-            # 再生中のチャネルを保持し、その終了を監視する
-            voice_channel = closing_voice.play()
 
-            # 3. しゃべり終わるまで、ここで時を止める
-            # music.get_busy()ではなく、voice_channelの監視が必要
-            while voice_channel.get_busy():
-                await asyncio.sleep(0.1)
+        # ハードウェアバッファの安定化
+        await asyncio.sleep(1.0)
+
+        # 1. 曲を流したまま、BGMの音量を「少し小さく」する
+        # ここで急激に下げればまた雑音の原因になる。
+        # 急激な減衰によるクリックノイズを回避する
+        for i in range(10):
+            pygame.mixer.music.set_volume(MUSIC_LEVEL * (1.0 - i * 0.05))
+            await asyncio.sleep(0.05)
+
+        await asyncio.sleep(0.6)
+
+        # 冒頭のクリックノイズを物理的に抑制するため、200msのフェードインを適用
+        voice_channel = closing_voice.play(fade_ms=200)
+
+        # 3. しゃべり終わるまで、ここで時を止める
+        # music.get_busy()ではなく、voice_channelの監視が必要
+        while voice_channel.get_busy():
+            await asyncio.sleep(0.1)
 
         # 4. しゃべり終わった。ここで初めて、曲をフェードアウトさせる
         print("   [System] Speech finished. Fading out music...")
