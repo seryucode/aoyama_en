@@ -49,10 +49,10 @@ POST_TALK_WAIT = 3.0
 # 2. File & Metadata Management
 # ==========================================
 
-def load_persona():
+def load_persona(): 
     if os.path.exists("persona.txt"):
         with open("persona.txt", "r", encoding="utf-8") as f:
-            return f.read().strip()
+            return f.read().strip() # persona.txtがない場合は、以下のデフォルトのペルソナを使用する
     return "You are Silas Requiem, a sophisticated AI DJ for a nocturnal classical program. Use elegant, philosophical English only."
 
 def get_and_clear_comments():
@@ -207,16 +207,16 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
             comment_part = f"\n【Messages from Unpurified Souls】\n{comments}\n"
             instruction = (
                 f"[SPEECH SECTION]\n"
-                f"Write a 150-word script. Reflect on {c_text}. "
+                f"Write a 150-word script. Briefly Reflect on {c_text}. "
                 f"Then, summarize the essence of one listener's message and offer a warm, thoughtful response that provides genuine comfort. "
-                f"Finally, introduce {n_text}.\n"
+                f"Finally, Briefly introduce {n_text}.\n"
                 f"CRITICAL: Use ONLY English. NO other languages, and NO non-English characters are allowed in this section. Do NOT use numbering, bullet points, or separators.\n\n"
                 f"[LOG SECTION]\n"
                 f"Provide a brief Japanese translation of your response to the listener, prefixed with '[LOG]'.\n\n"
                 f"Messages from Unpurified Souls:\n{comments if comments else 'None'}"
             )
         else:
-            instruction = f"Briefly reflect on {c_text}. {time_context} Then provide a sophisticated introduction for {n_text}. Approx 200 words. Do NOT include sound effects. Write ONLY the spoken words."
+            instruction = f"Briefly reflect on {c_text}. {time_context} Then provide a sophisticated introduction for {n_text}. Approx 150 words. Do NOT include sound effects. Write ONLY the spoken words."
 
     prompt = f"{persona_setting}\n\n{comment_part}\n\n[Request]\n{instruction}\n\n*Write in elegant English only (except after [LOG] if requested). Strictly NO sound effects or stage directions."
 
