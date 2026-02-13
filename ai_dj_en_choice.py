@@ -241,6 +241,9 @@ async def main_loop():
     pygame.mixer.init()
     available_ids = list(SONG_FILES.keys())
     next_talk_audio = "next_talk.mp3"
+
+    # 一回流した曲を貯めるリスト
+    played_in_session = []
     
     if not available_ids:
         print("音楽ファイルが見つかりません。")
@@ -263,6 +266,7 @@ async def main_loop():
 
         while True:
             mark_as_played(current_id)
+            played_in_session.append(current_id)
             current_info = get_song_info(current_id)
             sound_temp = pygame.mixer.Sound(SONG_FILES[current_id])
             duration = sound_temp.get_length()
@@ -271,8 +275,17 @@ async def main_loop():
             pygame.mixer.music.load(SONG_FILES[current_id])
             pygame.mixer.music.set_volume(MUSIC_LEVEL); pygame.mixer.music.play()
 
+            # 次の曲を選ぶ際、記憶にあるものを候補から除外する
+            # 曲が尽きることはあるまいが、念のため安全策は講じておく
+            remaining_ids = [i for i in available_ids if i not in played_in_session]
+        
+            if not remaining_ids:
+                # 万が一、全ての曲を流し尽くしたなら記憶をリセットする
+                played_in_session.clear()
+                remaining_ids = available_ids
+
             # 次の曲の選定と台本の準備
-            next_id = select_next_song_weighted(SONG_DB, available_ids)
+            next_id = select_next_song_weighted(SONG_DB, remaining_ids)
             next_info = get_song_info(next_id)
             
             prep_task = asyncio.create_task(
@@ -337,7 +350,7 @@ async def main_loop():
         pygame.mixer.music.fadeout(10000)
         
         # 完全に音が消えるまでの余韻
-        await asyncio.sleep(5.0)
+        await asyncio.sleep(10.0)
 
     finally:
         # 記録を刻み、舞台を片付ける
