@@ -358,8 +358,11 @@ async def main_loop():
                 try: 
                     print(f"   [Play] Silas Requiem: Speaking after the music...")
                     voice = pygame.mixer.Sound(next_talk_audio) 
+                    # 再生開始の合図を送る前に、ハードウェアを安定させる
+                    await asyncio.sleep(0.5)
                     voice.set_volume(VOICE_LEVEL)
-                    voice.play()
+                    voice.play(fade_ms=150)
+
                     while pygame.mixer.get_busy(): 
                         await asyncio.sleep(0.5)
                 except Exception as e:
@@ -394,9 +397,9 @@ async def main_loop():
         # 1. 曲を流したまま、BGMの音量を「少し小さく」する
         # ここで急激に下げればまた雑音の原因になる。
         # 急激な減衰によるクリックノイズを回避する
-        for i in range(10):
-            pygame.mixer.music.set_volume(MUSIC_LEVEL * (1.0 - i * 0.05))
-            await asyncio.sleep(0.1)
+        for i in range(40):
+            pygame.mixer.music.set_volume(MUSIC_LEVEL * (1.0 - i * 0.015))
+            await asyncio.sleep(0.05)
 
         await asyncio.sleep(0.6)
 
