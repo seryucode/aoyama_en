@@ -9,6 +9,7 @@ import pytchat
 import asyncio
 import edge_tts
 import shutil
+import threading    
 from datetime import datetime, timezone, timedelta
 from google import genai
 
@@ -25,7 +26,7 @@ BOOST_2 = 3.0 # play_flagに2をつけた場合の重み
 
 # --- YouTube設定 ----
 USE_YOUTUBE = True         # True（配信用）ならYouTube、Falseならcomment.txtを使用
-VIDEO_ID = "KnTxV_s8l5g"     # YouTubeの動画ID（URLの最後にある英数字）ダブルクォーテーションで囲むこと
+VIDEO_ID = "9ONDoDYBtsk"   # YouTubeの動画ID（URLの最後にある英数字）ダブルクォーテーションで囲むこと
 comment_buffer = []      # YouTube用バッファ
 # --------------------
 
@@ -88,18 +89,18 @@ def get_and_clear_comments(): # 配信スイッチに基づいてコメント取
                 print(f"   [System] File sync error: {e}")
         return content
 
-async def fetch_comments(video_id): # YouTubeコメントのバックグラウンド取得
+def fetch_comments_sync(video_id):
     if not USE_YOUTUBE: return
     try:
-        chat = pytchat.create(video_id)
+        # 信号処理（interruptable）をオフにする。これでエラーを封殺する。
+        chat = pytchat.create(video_id, interruptable=False)
         while chat.is_alive():
             for c in chat.get().items:
                 comment_buffer.append(f"{c.author.name}: {c.message}")
                 if len(comment_buffer) > 100: comment_buffer.pop(0)
-        
-        await asyncio.sleep(1)
+            time.sleep(1)
     except Exception as e:
-        print(f"   [System] YouTube Chat monitor error: {e}")        
+        print(f"   [System] YouTube Chat monitor error: {e}")
 
 def load_song_database(): # 音楽CSVの読み込み
     song_db = {}
@@ -187,13 +188,13 @@ def select_next_song_weighted(song_db, available_ids): # 選曲エンジン
     return random.choices(candidates, weights=weights, k=1)[0]
 
 def mark_as_played(song_id):
-    """ファイルへの書き込みを排除し、メモリ上のデータベースのみを更新する"""
+    #"""ファイルへの書き込みを排除し、メモリ上のデータベースのみを更新する"""
     now_str = get_now_jst().isoformat()
     if song_id in SONG_DB:
         SONG_DB[song_id]['last_played'] = now_str
 
 def save_song_database():
-    """蓄積されたメモリ上の情報を、一度だけファイルへ記録する"""
+    #"""蓄積されたメモリ上の情報を、一度だけファイルへ記録する"""
     if not os.path.exists(CSV_PATH) or not SONG_DB:
         return
     
@@ -316,10 +317,11 @@ async def main_loop():
     pygame.mixer.pre_init(44100, -16, 2, 4096) 
     pygame.mixer.init()
 
-    # --- チャット取得タスクのバックグラウンド起動 ---
+    # --- チャット取得を「純粋なスレッド」として分離 ---
     if USE_YOUTUBE:
         print(f"   [System] Connecting to YouTube Live: {VIDEO_ID}")
-        asyncio.create_task(fetch_comments(VIDEO_ID))
+        # daemon=True により、メイン終了時にこのスレッドも破棄される
+        threading.Thread(target=fetch_comments_sync, args=(VIDEO_ID,), daemon=True).start()
     # ----------------------------------------------
 
     available_ids = list(SONG_FILES.keys())
@@ -333,7 +335,7 @@ async def main_loop():
         return
 
     # --- クロージングの言葉を最初に用意し、メモリへ保持する ---
-    print("  [System] Preparing final script in advance...")
+    print("   [System] Preparing final script in advance...")
     ed_script = await generate_script_async("closing")
     await edge_tts.Communicate(ed_script, VOICE_NAME, rate="-10%").save(final_audio)
     final_voice_obj = pygame.mixer.Sound(final_audio) 
@@ -413,7 +415,7 @@ async def main_loop():
             await asyncio.sleep(POST_TALK_WAIT)
             current_id = next_id
 
-    except (asyncio.CancelledError, KeyboardInterrupt):
+    except (asyncio.CancelledError, KeyboardInterrupt): 
         print("\n   [System] Finalizing...")
 
         for i in range(40):
