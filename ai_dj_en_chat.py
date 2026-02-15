@@ -8,6 +8,7 @@ import pygame
 import pytchat
 import asyncio
 import edge_tts
+import shutil
 from datetime import datetime, timezone, timedelta
 from google import genai
 
@@ -23,14 +24,14 @@ BOOST_2 = 3.0 # play_flagに2をつけた場合の重み
 # --------------------
 
 # --- YouTube設定 ----
-USE_YOUTUBE = True       # True（配信用）ならYouTube、Falseならcomment.txtを使用
-VIDEO_ID = "YOUR_ID"     # YouTubeの動画ID（URLの最後にある英数字）
+USE_YOUTUBE = True         # True（配信用）ならYouTube、Falseならcomment.txtを使用
+VIDEO_ID = "KnTxV_s8l5g"     # YouTubeの動画ID（URLの最後にある英数字）ダブルクォーテーションで囲むこと
 comment_buffer = []      # YouTube用バッファ
 # --------------------
 
 MUSIC_FOLDER = r"D:/Music"  # 音楽ファイルのフォルダ
 CSV_PATH = "musicdata.csv"  # 音楽データのCSVファイル
-MODEL_NAME = 'gemini-2.5-flash' # LLMのモデル名（2026年2月現在'gemini-2.5-flash'はちゃんと存在する）
+MODEL_NAME = 'gemini-2.5-flash' # LLMのモデル名（2026年2月現在'gemini-2.5-flash'は存在する）
 VOICE_NAME = "en-US-ChristopherNeural"
 
 if api_key:
@@ -63,11 +64,7 @@ def load_persona(): # AIペルソナの読み込み
             return f.read().strip() # persona.txtがない場合は、以下のデフォルトのペルソナを使用する
     return "You are Silas Requiem, a sophisticated AI DJ for a classical program. Use elegant, philosophical English only."
 
-import os
-import shutil
-
 def get_and_clear_comments(): # 配信スイッチに基づいてコメント取得先を自動で切り替える
-
     if USE_YOUTUBE: # YouTubeモード：メモリ上のコメントバッファを返す
         global comment_buffer
         if not comment_buffer: return ""
@@ -92,16 +89,15 @@ def get_and_clear_comments(): # 配信スイッチに基づいてコメント取
         return content
 
 async def fetch_comments(video_id): # YouTubeコメントのバックグラウンド取得
-    #"""YouTubeモード時のみバックグラウンドで動作"""
     if not USE_YOUTUBE: return
     try:
-        chat = pytchat.LiveChatAsync(video_id)
+        chat = pytchat.create(video_id)
         while chat.is_alive():
-            data = await chat.get_async()
-            for c in data.items:
+            for c in chat.get().items:
                 comment_buffer.append(f"{c.author.name}: {c.message}")
                 if len(comment_buffer) > 100: comment_buffer.pop(0)
-            await asyncio.sleep(1)
+        
+        await asyncio.sleep(1)
     except Exception as e:
         print(f"   [System] YouTube Chat monitor error: {e}")        
 
@@ -201,13 +197,11 @@ def save_song_database():
     if not os.path.exists(CSV_PATH) or not SONG_DB:
         return
     
-    # 既存のヘッダーを取得するために一度読み込む
     fieldnames = []
     with open(CSV_PATH, 'r', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames
 
-    # まとめて書き出し
     with open(CSV_PATH, 'w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -263,9 +257,8 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
     except Exception as e: return f"System Error: {e}"
 
 async def prepare_next_talk(prompt_type, current_info, next_info, comments, output_file):
-
-    #台本生成から音声合成までを一括して管理する。
-    #通信失敗時はデフォルトの台本を適用し、番組の停止を回避する。
+    # 台本生成から音声合成までを一括して管理する。
+    # 通信失敗時はデフォルトの台本を適用し、番組の停止を回避する。
 
     # 1. 台本生成（リトライとタイムアウトを適用）
     full_response = await safe_call(generate_script_async, prompt_type, current_info, next_info, comments)
@@ -302,10 +295,9 @@ async def prepare_next_talk(prompt_type, current_info, next_info, comments, outp
     return speech_text
 
 async def safe_call(func, *args, **kwargs):
-    #"""指数バックオフを用いたリトライ実行"""
+    # 指数バックオフを用いたリトライ実行
     for i in range(MAX_RETRIES):
         try:
-            # タイムアウト付きで実行
             return await asyncio.wait_for(func(*args, **kwargs), timeout=TIMEOUT_SEC)
         except Exception as e:
             if i == MAX_RETRIES - 1:
@@ -334,14 +326,13 @@ async def main_loop():
     next_talk_audio = "next_talk.mp3"
     final_audio = "final.mp3"
 
-    # 一回流した曲を貯めるリスト
     played_in_session = []
     
     if not available_ids:
         print("音楽ファイルが見つかりません。")
         return
 
-    # --- クロージングの言葉を最初に用意し、メモリへ保持する （音楽と重なるときのノイズ回避のため）---
+    # --- クロージングの言葉を最初に用意し、メモリへ保持する ---
     print("  [System] Preparing final script in advance...")
     ed_script = await generate_script_async("closing")
     await edge_tts.Communicate(ed_script, VOICE_NAME, rate="-10%").save(final_audio)
@@ -358,7 +349,8 @@ async def main_loop():
         await edge_tts.Communicate(op_script, VOICE_NAME, rate="-10%").save(next_talk_audio)
         
         voice = pygame.mixer.Sound(next_talk_audio)
-        voice.set_volume(VOICE_LEVEL); voice.play()
+        voice.set_volume(VOICE_LEVEL)
+        voice.play()
         while pygame.mixer.get_busy(): await asyncio.sleep(0.5)
 
         current_id = select_next_song_weighted(SONG_DB, available_ids)
@@ -372,21 +364,18 @@ async def main_loop():
 
             print(f"\n♪ Now Playing: {current_info['title']} [{int(duration)//60:02}:{int(duration)%60:02}]")
             pygame.mixer.music.load(SONG_FILES[current_id])
-            pygame.mixer.music.set_volume(MUSIC_LEVEL); pygame.mixer.music.play()
+            pygame.mixer.music.set_volume(MUSIC_LEVEL)
+            pygame.mixer.music.play()
 
-            # 次の曲を選ぶ際、記憶にあるものを候補から除外する
-            # 曲が尽きることはあるまいが、念のため安全策は講じておく
             remaining_ids = [i for i in available_ids if i not in played_in_session]
         
             if not remaining_ids:
-                # 万が一、全ての曲を流し尽くしたなら記憶をリセットする
-                last_played = played_in_session[-1] if played_in_session else None  # 最後に流した曲を覚えておく
+                last_played = played_in_session[-1] if played_in_session else None
                 played_in_session.clear()
                 if last_played:
                     played_in_session.append(last_played)
-                remaining_ids = [i for i in available_ids if i not in played_in_session] # 最後に流した曲以外を候補とする
+                remaining_ids = [i for i in available_ids if i not in played_in_session]
 
-            # 次の曲の選定と台本の準備
             next_id = select_next_song_weighted(SONG_DB, remaining_ids)
             next_info = get_song_info(next_id)
             
@@ -394,73 +383,57 @@ async def main_loop():
                 prepare_next_talk("talk", current_info, next_info, get_and_clear_comments(), next_talk_audio)
             )
 
-            # 音楽が再生中である限り、ここで足を止める
             start_time = time.time()
             while pygame.mixer.music.get_busy():
-                # MAX_PLAY_TIMEによる制限がある場合の処理
                 if MAX_PLAY_TIME > 0 and (time.time() - start_time) > MAX_PLAY_TIME:
                     break
                 await asyncio.sleep(0.5)
 
-            # 曲が終了、あるいは中断されたので音楽を止める
             pygame.mixer.music.fadeout(2000)
             await asyncio.sleep(2)
 
-            await prep_task # 台本準備の完了を待つ
-            await asyncio.sleep(0.5)  # ファイルシステムの同期待機
+            await prep_task 
+            await asyncio.sleep(0.5)
 
             if os.path.exists(next_talk_audio) and os.path.getsize(next_talk_audio) > 100:    
                 try: 
                     print(f"   [Play] Silas Requiem: Speaking after the music...")
                     voice = pygame.mixer.Sound(next_talk_audio) 
-                    # 再生開始の合図を送る前に、ハードウェアを安定させる
                     await asyncio.sleep(0.5)
                     voice.set_volume(VOICE_LEVEL)
                     voice.play(fade_ms=150)
 
                     while pygame.mixer.get_busy(): 
                         await asyncio.sleep(0.5)
-                except Exception as e   : # 音声ファイルの読み込みに失敗した場合
+                except Exception as e:
                     print(f"  [System] Audio load failed: {e}. Skipping talk to maintain flow.")
             else:
                 print("  [System] Audio file missing or empty. Skipping talk to maintain flow.")
             
             await asyncio.sleep(POST_TALK_WAIT)
-            current_id = next_id #
+            current_id = next_id
 
     except (asyncio.CancelledError, KeyboardInterrupt):
         print("\n   [System] Finalizing...")
 
-        # 1. 曲を流したまま、BGMの音量を「少し小さく」する
-        # ここで急激に下げればまた雑音の原因になる。
-        # 急激な減衰によるクリックノイズを回避する
         for i in range(40):
             pygame.mixer.music.set_volume(MUSIC_LEVEL * (1.0 - i * 0.015))
             await asyncio.sleep(0.05)
 
-        # [↑の修正案。どっちでもいい気がする] 音楽を即座に下げ、ノイズの元となるループを排除
-        #pygame.mixer.music.set_volume(MUSIC_LEVEL * 0.3)
-
         await asyncio.sleep(1.0)
 
-        # 冒頭のクリックノイズを物理的に抑制するため、300msのフェードインを適用
         voice_channel = final_voice_obj.play(fade_ms=300)
         voice_channel.set_volume(VOICE_LEVEL * 0.9)
 
-        # 3. しゃべり終わるまで、ここで時を止める
-        # music.get_busy()ではなく、voice_channelの監視が必要
         while voice_channel.get_busy():
             await asyncio.sleep(0.5)
 
-        # 4. しゃべり終わった。ここで初めて、曲をフェードアウトさせる
         print("   [System] Speech finished. Fading out music...")
         pygame.mixer.music.fadeout(10000)
         
-        # 完全に音が消えるまでの余韻
         await asyncio.sleep(10.0)
 
     finally:
-        # 記録を刻み、舞台を片付ける
         save_song_database()
         pygame.mixer.quit()
         for temp_file in ["next_talk.mp3", "final.mp3"]:

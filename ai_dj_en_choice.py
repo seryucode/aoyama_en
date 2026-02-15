@@ -5,8 +5,10 @@ import glob
 import re
 import csv
 import pygame
+import pytchat
 import asyncio
 import edge_tts
+import shutil
 from datetime import datetime, timezone, timedelta
 from google import genai
 
@@ -16,23 +18,21 @@ from google import genai
 api_key = os.environ.get("GEMINI_API_KEY")
 
 # --- 選曲モード設定 ---
-RANDOM_MODE = False
-UTC_OFFSET = 9
-BOOST_2 = 10.0
+RANDOM_MODE = False # Trueでランダム選曲 
+UTC_OFFSET = 9 # JSTなら9 ESTなら-5 
+BOOST_2 = 3.0 # play_flagに2をつけた場合の重み
 # --------------------
 
-MUSIC_FOLDER = r"D:/Music"
-CSV_PATH = "musicdata.csv"
-VOICEVOX_URL = "http://127.0.0.1:50021"
-SPEAKER_ID = 13
-MODEL_NAME = 'gemini-2.5-flash'
-VOICE_NAME = "en-US-ChristopherNeural"
+# --- YouTube設定 ----
+USE_YOUTUBE = True       # True（配信用）ならYouTube、Falseならcomment.txtを使用
+VIDEO_ID = "KnTxV_s8l5g"     # YouTubeの動画ID（URLの最後にある英数字）
+comment_buffer = []      # YouTube用バッファ
+# --------------------
 
-# --- 安定性のための定数 ---
-MAX_RETRIES = 3
-RETRY_DELAY = 2.0  # 秒
-TIMEOUT_SEC = 15.0 # API待機上限
-DEFAULT_SCRIPT = "The stars are always there. Let the music speak for its essence."
+MUSIC_FOLDER = r"D:/Music"  # 音楽ファイルのフォルダ
+CSV_PATH = "musicdata.csv"  # 音楽データのCSVファイル
+MODEL_NAME = 'gemini-2.5-flash' # LLMのモデル名（2026年2月現在'gemini-2.5-flash'はちゃんと存在する）
+VOICE_NAME = "en-US-ChristopherNeural"
 
 if api_key:
     client = genai.Client(api_key=api_key)
@@ -40,35 +40,84 @@ else:
     print("【Error】APIキーが設定されていません。")
     exit()
 
-VOICE_LEVEL = 0.95
-MUSIC_LEVEL = 0.8
-MAX_PLAY_TIME = 200
-POST_TALK_WAIT = 3.0
+# --- 安定性のための定数 ---
+MAX_RETRIES = 3     # 最大リトライ回数
+RETRY_DELAY = 2.0   # リトライ待機時間（秒）
+TIMEOUT_SEC = 15.0  # API待機上限（秒）
+DEFAULT_SCRIPT = "The stars are always there. Let the music speak for its essence."     #AIスクリプト生成失敗時のデフォルトスクリプト
+# --------------------
+
+# --- 音の設定 ---
+VOICE_LEVEL = 0.9   # DJ音量
+MUSIC_LEVEL = 0.8    # 音楽音量
+MAX_PLAY_TIME = 180  # 最大再生時間
+POST_TALK_WAIT = 3.0 # 話後待機時間
+# --------------------
 
 # ==========================================
 # 2. File & Metadata Management
 # ==========================================
 
-def load_persona(): 
+def load_persona(): # AIペルソナの読み込み 
     if os.path.exists("persona.txt"):
         with open("persona.txt", "r", encoding="utf-8") as f:
             return f.read().strip() # persona.txtがない場合は、以下のデフォルトのペルソナを使用する
-    return "You are Silas Requiem, a sophisticated AI DJ for a nocturnal classical program. Use elegant, philosophical English only."
+    return "You are Silas Requiem, a sophisticated AI DJ for a classical program. Use elegant, philosophical English only."
 
-def get_and_clear_comments():
-    content = ""
-    if os.path.exists("comment.txt"):
-        try:
-            with open("comment.txt", "r", encoding="utf-8") as f:
-                lines = f.readlines()
-            content = "".join(lines[-10:]).strip()
-            with open("comment.txt", "w", encoding="utf-8") as f:
-                pass 
-        except Exception as e:
-            print(f"   [System] Comment retrieval error: {e}")
-    return content
+def get_and_clear_comments(): # 配信スイッチに基づいてコメント取得先を自動で切り替える
 
-def load_song_database():
+    if USE_YOUTUBE: # YouTubeモード：メモリ上のコメントバッファを返す
+        global comment_buffer
+        if not comment_buffer: return ""
+        content = "\n".join(comment_buffer)
+        comment_buffer.clear()
+        return content
+    else: # ローカルモード：既存のcomment.txtを読み込む
+        src = "comment.txt"
+        tmp = "comment_work.txt"
+        content = ""
+        
+        if os.path.exists(src):
+            try:
+                # ファイル名を変更することで、外部ツールからの追記を遮断し、占有権を確保する
+                shutil.move(src, tmp)
+                with open(tmp, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                    content = "".join(lines[-100:]).strip()  # 最後の100行だけ読み込む
+                os.remove(tmp) # 処理後に削除
+            except Exception as e:
+                print(f"   [System] File sync error: {e}")
+        return content
+
+async def fetch_comments(video_id):
+    #"""同期ライブラリを非同期で安全に動かす完全版"""
+    if not USE_YOUTUBE: return
+    
+    print(f"   [System] Connecting to Live Chat: {video_id}") # 接続試行を表示
+    
+    try:
+        # ここは同期版の create を使う（これが一番安定している）
+        chat = pytchat.create(video_id=video_id)
+        
+        loop = asyncio.get_running_loop()
+
+        while chat.is_alive():
+            # ブロッキング処理を別スレッドに逃がす（これでCtrl+Cも効くし、データも取れる）
+            data = await loop.run_in_executor(None, chat.get)
+            
+            for c in data.items:
+                comment_buffer.append(f"{c.author.name}: {c.message}")
+                if len(comment_buffer) > 100: comment_buffer.pop(0)
+            
+            await asyncio.sleep(0.5)
+
+    except asyncio.CancelledError:
+        print("   [System] Chat task cancelled.")
+        return
+    except Exception as e:
+        print(f"   [System] YouTube Chat monitor error: {e}") 
+
+def load_song_database(): # 音楽CSVの読み込み
     song_db = {}
     if not os.path.exists(CSV_PATH): 
         return song_db
@@ -80,7 +129,7 @@ def load_song_database():
                     key_id = int(row['id'])
                     song_db[key_id] = {
                         'play_flag': int(row.get('play_flag', 0)),
-                        'time_scale': float(row.get('time_scale', 5)),
+                        'time_scale': float(row.get('time_scale', 5)), 
                         'last_played': row.get('last_played', ''),
                         'title': row.get('title', 'Unknown Title'),
                         'composer': row.get('composer', 'Unknown Composer'),
@@ -90,7 +139,7 @@ def load_song_database():
     except Exception as e: print(f"   [Error] CSV Load Failed: {e}")
     return song_db
 
-def scan_music_files():
+def scan_music_files(): # 音楽ファイルのスキャン 
     files_map = {}
     all_files = glob.glob(os.path.join(MUSIC_FOLDER, "*.mp3"))
     for path in all_files:
@@ -98,7 +147,7 @@ def scan_music_files():
         if match: files_map[int(match.group(1))] = path
     return files_map
 
-def get_song_info(song_id):
+def get_song_info(song_id): # 曲情報の取得
     if song_id in SONG_DB:
         return SONG_DB[song_id]
     if song_id in SONG_FILES:
@@ -108,17 +157,17 @@ def get_song_info(song_id):
 
 # --- 選曲エンジン ---
 
-def get_now_jst():
+def get_now_jst(): # 現在時刻の取得
     return datetime.now(timezone(timedelta(hours=UTC_OFFSET)))
 
-def get_target_scale():
+def get_target_scale(): # 目標スケールの取得
     now = get_now_jst()
     # 1日の経過秒数を算出（0〜86400）
     seconds = now.hour * 3600 + now.minute * 60 + now.second
     # 正午（43200秒）との距離に基づき、1.0から9.0の間で変動させる
     return 9.0 - (abs(43200 - seconds) / 43200.0) * 8.0
 
-def select_next_song_weighted(song_db, available_ids):
+def select_next_song_weighted(song_db, available_ids): # 選曲エンジン 
     t_target = get_target_scale()
     now_ts = get_now_jst().timestamp()
     
@@ -142,7 +191,7 @@ def select_next_song_weighted(song_db, available_ids):
             # 指定されたスケールと曲のスケールの距離を算出
             dist = abs(t_target - s_val)
             # 距離が近いほど重みを指数関数的に増大させる
-            w = (p_logic / ((dist + 1.0) ** 2)) * time_diff
+            w = (p_logic / ((dist + 1.0) ** 2)) * time_diff # 2をつけると重みが増える 
             if dist > 3.0:
                 w *= 0.000001
         
@@ -188,7 +237,7 @@ SONG_FILES = scan_music_files()
 # 3. AI Script Generation & Voice Synthesis
 # ==========================================
 
-async def generate_script_async(prompt_type, current_info=None, next_info=None, comments=None):
+async def generate_script_async(prompt_type, current_info=None, next_info=None, comments=None): #トークスクリプトを生成する
     persona_setting = load_persona()
     comment_part = ""
 
@@ -199,7 +248,7 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
     if prompt_type == "opening":
         instruction = f"Write a program opening. Greet listeners. {time_context} Approx 100 words. Do NOT describe sound effects (e.g. 'music starts'). Write ONLY the spoken English words."
     elif prompt_type == "closing":
-        instruction = f"Write a program closing. Bid farewell to the day. {time_context} Approx 100 words. Do NOT describe sound effects. Write ONLY the spoken English words."
+        instruction = f"Write a program closing. Bid farewell to the day. Approx 100 words. Do NOT describe sound effects. Write ONLY the spoken English words."
     else:
         c_text = f"'{current_info['title']}' by {current_info['composer']}, performed by {current_info['performer']}"
         n_text = f"'{next_info['title']}' by {next_info['composer']}, performed by {next_info['performer']}"
@@ -233,7 +282,7 @@ async def prepare_next_talk(prompt_type, current_info, next_info, comments, outp
     # 1. 台本生成（リトライとタイムアウトを適用）
     full_response = await safe_call(generate_script_async, prompt_type, current_info, next_info, comments)
     
-    if not full_response:
+    if not full_response: 
         # 通信全滅時のフォールバック
         speech_text = DEFAULT_SCRIPT
         log_text = "API connection failed. Used default fallback script."
@@ -242,7 +291,7 @@ async def prepare_next_talk(prompt_type, current_info, next_info, comments, outp
         parts = re.split(r'\[LOG\]', full_response, flags=re.IGNORECASE)
         speech_text = parts[0].strip()
         speech_text = re.sub(r'\[.*?\]', '', speech_text).strip()
-        log_text = parts[1].strip() if len(parts) > 1 else "No translation log."
+        log_text = parts[1].strip() if len(parts) > 1 else ""
 
     # ログの出力（デバッグ用）
     print(f"\n[Future Script Prepared]\n{speech_text}")
@@ -259,8 +308,8 @@ async def prepare_next_talk(prompt_type, current_info, next_info, comments, outp
     
     if not success:
         print(f"  [System Error] Failed to generate audio file: {output_file}")
-        # 音声ファイルが生成できなかった場合、この後の pygame.mixer.Sound() で
-        # エラーが出る可能性があるため、ここで空のファイルを作る等の処理が望ましい
+        if os.path.exists(output_file): os.remove(output_file)
+        return None
 
     return speech_text
 
@@ -284,22 +333,38 @@ async def safe_call(func, *args, **kwargs):
 # ==========================================
 
 async def main_loop():
-    pygame.mixer.pre_init(44100, -16, 2, 2048) 
+    pygame.mixer.pre_init(44100, -16, 2, 4096) 
     pygame.mixer.init()
+
+    # --- 変数定義は try の外で行う ---
     available_ids = list(SONG_FILES.keys())
     next_talk_audio = "next_talk.mp3"
-
+    final_audio = "final.mp3"
+    chat_task = None
+    final_voice_obj = None # 割り込み時に備え、Noneで定義しておく
+    
     # 一回流した曲を貯めるリスト
     played_in_session = []
     
-    if not available_ids:
-        print("音楽ファイルが見つかりません。")
-        return
-
-    mode_text = "RANDOM" if RANDOM_MODE else "TIME-SYNC"
-    print(f"\n† Silas Requiem Online ({mode_text} / UTC+{UTC_OFFSET}) †\n")
-
     try:
+        if USE_YOUTUBE: 
+            print(f"   [System] Connecting to YouTube Live: {VIDEO_ID}")
+            chat_task = asyncio.create_task(fetch_comments(VIDEO_ID)) #チャット取得タスクのバックグラウンド起動
+
+        if not available_ids:
+            print("音楽ファイルが見つかりません。")
+            return
+    
+        # --- クロージングの言葉を最初に用意し、メモリへ保持する （音楽と重なるときのノイズ回避のため）---
+        print("   [System] Preparing final script in advance...")
+        ed_script = await generate_script_async("closing")
+        await edge_tts.Communicate(ed_script, VOICE_NAME, rate="-10%").save(final_audio)
+        final_voice_obj = pygame.mixer.Sound(final_audio) 
+        # ---------------------------------------------------------  
+
+        mode_text = "RANDOM" if RANDOM_MODE else "TIME-SYNC"
+        print(f"\n† Silas Requiem Online ({mode_text} / UTC+{UTC_OFFSET}) †\n")
+
         # --- オープニング ---
         op_script = await generate_script_async("opening")
         print(f"[Opening Script]\n{op_script}\n")
@@ -328,8 +393,11 @@ async def main_loop():
         
             if not remaining_ids:
                 # 万が一、全ての曲を流し尽くしたなら記憶をリセットする
+                last_played = played_in_session[-1] if played_in_session else None  # 最後に流した曲を覚えておく
                 played_in_session.clear()
-                remaining_ids = available_ids
+                if last_played:
+                    played_in_session.append(last_played)
+                remaining_ids = [i for i in available_ids if i not in played_in_session] # 最後に流した曲以外を候補とする
 
             # 次の曲の選定と台本の準備
             next_id = select_next_song_weighted(SONG_DB, remaining_ids)
@@ -342,6 +410,8 @@ async def main_loop():
             # 音楽が再生中である限り、ここで足を止める
             start_time = time.time()
             while pygame.mixer.music.get_busy():
+                if not pygame.mixer.get_init(): # pygameが初期化されていない場合
+                    break
                 # MAX_PLAY_TIMEによる制限がある場合の処理
                 if MAX_PLAY_TIME > 0 and (time.time() - start_time) > MAX_PLAY_TIME:
                     break
@@ -354,7 +424,7 @@ async def main_loop():
             await prep_task # 台本準備の完了を待つ
             await asyncio.sleep(0.5)  # ファイルシステムの同期待機
 
-            if os.path.exists(next_talk_audio):
+            if os.path.exists(next_talk_audio) and os.path.getsize(next_talk_audio) > 100:    
                 try: 
                     print(f"   [Play] Silas Requiem: Speaking after the music...")
                     voice = pygame.mixer.Sound(next_talk_audio) 
@@ -365,34 +435,16 @@ async def main_loop():
 
                     while pygame.mixer.get_busy(): 
                         await asyncio.sleep(0.5)
-                except Exception as e:
-                    print(f"  [System] Audio load error: {e}")
+                except Exception as e   : # 音声ファイルの読み込みに失敗した場合
+                    print(f"  [System] Audio load failed: {e}. Skipping talk to maintain flow.")
             else:
-                print("  [System] Audio file missing. Skipping talk to maintain flow.")
+                print("  [System] Audio file missing or empty. Skipping talk to maintain flow.")
             
             await asyncio.sleep(POST_TALK_WAIT)
             current_id = next_id #
 
     except (asyncio.CancelledError, KeyboardInterrupt):
         print("\n   [System] Finalizing...")
-
-        # 幕引きの言葉を準備する
-        ed_script = await generate_script_async("closing")
-        print(f"\n[Closing Script]\n{ed_script}")
-
-        final_audio = "final.mp3"
-        await edge_tts.Communicate(
-            ed_script,
-            VOICE_NAME,
-            rate="-10%"
-        ).save(final_audio)
-
-        if os.path.exists(final_audio):
-            closing_voice = pygame.mixer.Sound(final_audio)
-            closing_voice.set_volume(VOICE_LEVEL * 0.8)
-
-        # ハードウェアバッファの安定化
-        await asyncio.sleep(1.0)
 
         # 1. 曲を流したまま、BGMの音量を「少し小さく」する
         # ここで急激に下げればまた雑音の原因になる。
@@ -401,15 +453,20 @@ async def main_loop():
             pygame.mixer.music.set_volume(MUSIC_LEVEL * (1.0 - i * 0.015))
             await asyncio.sleep(0.05)
 
-        await asyncio.sleep(0.6)
+        # [↑の修正案。どっちでもいい気がする] 音楽を即座に下げ、ノイズの元となるループを排除
+        #pygame.mixer.music.set_volume(MUSIC_LEVEL * 0.3)
 
-        # 冒頭のクリックノイズを物理的に抑制するため、200msのフェードインを適用
-        voice_channel = closing_voice.play(fade_ms=200)
+        await asyncio.sleep(1.0)
 
-        # 3. しゃべり終わるまで、ここで時を止める
-        # music.get_busy()ではなく、voice_channelの監視が必要
-        while voice_channel.get_busy():
-            await asyncio.sleep(0.5)
+        # 冒頭のクリックノイズを物理的に抑制するため、300msのフェードインを適用
+        if final_voice_obj:
+            voice_channel = final_voice_obj.play(fade_ms=300)
+            voice_channel.set_volume(VOICE_LEVEL * 1.0)
+
+            # 3. しゃべり終わるまで、ここで時を止める
+            # music.get_busy()ではなく、voice_channelの監視が必要
+            while voice_channel.get_busy():
+                await asyncio.sleep(0.5)
 
         # 4. しゃべり終わった。ここで初めて、曲をフェードアウトさせる
         print("   [System] Speech finished. Fading out music...")
@@ -420,6 +477,14 @@ async def main_loop():
 
     finally:
         # 記録を刻み、舞台を片付ける
+        # YouTubeのチャット取得タスクを安全に停止する
+        if chat_task:
+            chat_task.cancel() # タスクに停止を命じる
+            try:
+                await chat_task # タスクが完全に消えるのを待つ
+            except asyncio.CancelledError:
+                pass
+
         save_song_database()
         pygame.mixer.quit()
         for temp_file in ["next_talk.mp3", "final.mp3"]:
@@ -428,7 +493,12 @@ async def main_loop():
                 except: pass
 
 if __name__ == "__main__":
+    # Windows環境でasyncioがCtrl+Cを正しく検知できるようにするための設定
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     try:
+        # Windowsにおける非同期イベントループの標準的な起動方法
+        # これだけでCtrl+Cは正しく KeyboardInterrupt として main_loop に伝わる
         asyncio.run(main_loop())
     except KeyboardInterrupt:
+        # main_loopの外側で最終的にキャッチし、エラーログを出さずに終了する
         pass
