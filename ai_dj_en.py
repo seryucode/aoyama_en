@@ -9,7 +9,8 @@ import asyncio
 import edge_tts
 from datetime import datetime, timezone, timedelta
 from google import genai
-
+# ==========================================
+# ai_dj_en.py   コメント取得Only
 # ==========================================
 # 1. 基本設定エリア
 # ==========================================

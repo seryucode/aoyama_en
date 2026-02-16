@@ -26,7 +26,7 @@ BOOST_2 = 3.0 # play_flagに2をつけた場合の重み
 
 # --- YouTube設定 ----
 USE_YOUTUBE = True         # True（配信用）ならYouTube、Falseならcomment.txtを使用
-VIDEO_ID = "9ONDoDYBtsk"   # YouTubeの動画ID（URLの最後にある英数字）ダブルクォーテーションで囲むこと
+VIDEO_ID = "OoaxPLyjS9g"   # YouTubeの動画ID（URLの最後にある英数字）ダブルクォーテーションで囲むこと
 comment_buffer = []      # YouTube用バッファ
 # --------------------
 
