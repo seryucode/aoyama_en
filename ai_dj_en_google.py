@@ -36,7 +36,7 @@ CSV_PATH = "musicdata.csv"  # 音楽データのCSVファイル
 MODEL_NAME = 'gemini-2.5-flash' # LLMのモデル名（2026年2月現在'gemini-2.5-flash'は存在する）
 VOICE_NAME = "en-US-ChristopherNeural" #Edge-TTSの声    
 VOICE_CODE_GOOGLE = "en-GB" #Googleの声の言語コード
-VOICE_NAME_GOOGLE = "en-GB-Chirp3-HD-Enceladus" #Googleの声 #en-GB-Neural2-O #en-GB-Chirp3-HD-Sadachbia #en-GB-Chirp3-HD-Enceladus
+VOICE_NAME_GOOGLE = "en-GB-Neural2-O" #Googleの声 #en-GB-Neural2-O #en-GB-Chirp3-HD-Sadachbia #en-GB-Chirp3-HD-Enceladus
 
 if api_key:
     client = genai.Client(api_key=api_key)
@@ -52,7 +52,7 @@ DEFAULT_SCRIPT = "The stars are always there. Let the music speak for its essenc
 # --------------------
 
 # --- 音の設定 ---
-VOICE_LEVEL = 1.0    # DJ音量
+VOICE_LEVEL = 0.9    # DJ音量
 MUSIC_LEVEL = 0.8    # 音楽音量
 MAX_PLAY_TIME = 180  # 最大再生時間
 POST_TALK_WAIT = 3.0 # 話後待機時間
