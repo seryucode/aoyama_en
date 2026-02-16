@@ -365,6 +365,17 @@ async def main_loop():
             duration = sound_temp.get_length()
 
             print(f"\n♪ Now Playing: {current_info['title']} [{int(duration)//60:02}:{int(duration)%60:02}]")
+
+            # ▼▼▼ OBSテロップ用のテキストファイル出力 ▼▼▼
+            try:
+                with open("now_playing.txt", "w", encoding="utf-8") as f:
+                    title = current_info.get('title', 'Unknown Title')
+                    composer = current_info.get('composer', 'Unknown Composer')
+                    f.write(f"♪ Title: {title}  -  Composer: {composer}")
+            except Exception as e:
+                print(f"  [Warning] Failed to write now_playing.txt: {e}")
+            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+            
             pygame.mixer.music.load(SONG_FILES[current_id])
             pygame.mixer.music.set_volume(MUSIC_LEVEL)
             pygame.mixer.music.play()
