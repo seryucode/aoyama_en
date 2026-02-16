@@ -27,7 +27,7 @@ BOOST_2 = 3.0 # play_flagに2をつけた場合の重み
 
 # --- YouTube設定 ----
 USE_YOUTUBE = True         # True（配信用）ならYouTube、Falseならcomment.txtを使用
-VIDEO_ID = "2B1MWT8pi1I"   # YouTubeの動画ID（URLの最後にある英数字）ダブルクォーテーションで囲むこと
+VIDEO_ID = "YN_bNVAji24"   # YouTubeの動画ID（URLの最後にある英数字）ダブルクォーテーションで囲むこと
 comment_buffer = []      # YouTube用バッファ
 # --------------------
 
@@ -36,7 +36,7 @@ CSV_PATH = "musicdata.csv"  # 音楽データのCSVファイル
 MODEL_NAME = 'gemini-2.5-flash' # LLMのモデル名（2026年2月現在'gemini-2.5-flash'は存在する）
 VOICE_NAME = "en-US-ChristopherNeural" #Edge-TTSの声    
 VOICE_CODE_GOOGLE = "en-GB" #Googleの声の言語コード
-VOICE_NAME_GOOGLE = "en-GB-Neural2-O" #Googleの声 #en-US-Chirp3-HD-Charon #en-GB-Chirp3-HD-Sadachbia
+VOICE_NAME_GOOGLE = "en-GB-Chirp3-HD-Enceladus" #Googleの声 #en-GB-Neural2-O #en-GB-Chirp3-HD-Sadachbia #en-GB-Chirp3-HD-Enceladus
 
 if api_key:
     client = genai.Client(api_key=api_key)
