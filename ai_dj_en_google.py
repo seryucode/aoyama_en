@@ -26,7 +26,7 @@ BOOST_2 = 3.0 # play_flagに2をつけた場合の重み
 # --------------------
 
 # --- YouTube設定 ----
-USE_YOUTUBE = True         # True（配信用）ならYouTube、Falseならcomment.txtを使用
+USE_YOUTUBE = False         # True（配信用）ならYouTube、Falseならcomment.txtを使用
 VIDEO_ID = "YN_bNVAji24"   # YouTubeの動画ID（URLの最後にある英数字）ダブルクォーテーションで囲むこと
 comment_buffer = []      # YouTube用バッファ
 # --------------------
@@ -35,8 +35,9 @@ MUSIC_FOLDER = r"D:/Music"  # 音楽ファイルのフォルダ
 CSV_PATH = "musicdata.csv"  # 音楽データのCSVファイル
 MODEL_NAME = 'gemini-2.5-flash' # LLMのモデル名（2026年2月現在'gemini-2.5-flash'は存在する）
 VOICE_NAME = "en-US-ChristopherNeural" #Edge-TTSの声    
-VOICE_CODE_GOOGLE = "en-GB" #Googleの声の言語コード
-VOICE_NAME_GOOGLE = "en-GB-Neural2-O" #Googleの声 #en-GB-Neural2-O #en-GB-Chirp3-HD-Sadachbia #en-GB-Chirp3-HD-Enceladus
+VOICE_CODE_GOOGLE = "ja-JP" #Googleの声の言語コード
+VOICE_NAME_GOOGLE = "ja-JP-Chirp3-HD-Enceladus" #Googleの声 #en-GB-Neural2-O #en-GB-Chirp3-HD-Sadachbia #en-GB-Chirp3-HD-Enceladus
+SPEAK_LANG = "Japanese" #AIの言語設定
 
 if api_key:
     client = genai.Client(api_key=api_key)
@@ -66,7 +67,7 @@ def load_persona(): # AIペルソナの読み込み
     if os.path.exists("persona.txt"):
         with open("persona.txt", "r", encoding="utf-8") as f:
             return f.read().strip() # persona.txtがない場合は、以下のデフォルトのペルソナを使用する
-    return "You are Silas Requiem, a sophisticated AI DJ for a classical program. Use elegant, philosophical English only."
+    return f"You are Silas Requiem, a sophisticated AI DJ for a classical program. Use elegant, philosophical {SPEAK_LANG} only."
 
 def get_and_clear_comments(): # 配信スイッチに基づいてコメント取得先を自動で切り替える
     if USE_YOUTUBE: # YouTubeモード：メモリ上のコメントバッファを返す
@@ -232,9 +233,9 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
     time_context = f"Briefly touch upon the feeling of this hour: {now_local.strftime('%Y-%m-%d %H')} (UTC{UTC_OFFSET:+}). Do not mention exact time." if is_seasonal else ""
     
     if prompt_type == "opening":
-        instruction = f"Write a program opening. Greet listeners. {time_context} Approx 100 words. Do NOT describe sound effects (e.g. 'music starts'). Write ONLY the spoken English words."
+        instruction = f"Write a program opening. Greet listeners. {time_context} Approx 100 words. Do NOT describe sound effects (e.g. 'music starts'). Write ONLY the spoken {SPEAK_LANG} words."
     elif prompt_type == "closing":
-        instruction = f"Write a program closing. Bid farewell to the day. Approx 100 words. Do NOT describe sound effects. Write ONLY the spoken English words."
+        instruction = f"Write a program closing. Bid farewell to the day. Approx 100 words. Do NOT describe sound effects. Write ONLY the spoken {SPEAK_LANG} words."
     else:
         c_text = f"'{current_info['title']}' by {current_info['composer']}, performed by {current_info['performer']}"
         n_text = f"'{next_info['title']}' by {next_info['composer']}, performed by {next_info['performer']}"
@@ -243,9 +244,9 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
             instruction = (
                 f"[SPEECH SECTION]\n"
                 f"Write a 150-word script. Briefly Reflect on {c_text}. "
-                f"Then, summarize the essence of one listener's message and offer a warm, thoughtful response that provides genuine comfort. "
+                f"Then, summarize the essence of one listener's message and offer a warm, thoughtful response addressing them by name that provides genuine comfort."
                 f"Finally, Briefly introduce {n_text}.\n"
-                f"CRITICAL: Use ONLY English. NO other languages, and NO non-English characters are allowed in this section. Do NOT use numbering, bullet points, or separators.\n\n"
+                f"CRITICAL: Use ONLY {SPEAK_LANG}. NO other languages are allowed in this section. Do NOT use numbering, bullet points, separators, or asterisks.\n\n"
                 f"[LOG SECTION]\n"
                 f"Provide a brief Japanese translation of your response to the listener, prefixed with '[LOG]'.\n\n"
                 f"Messages from Unpurified Souls:\n{comments if comments else 'None'}"
@@ -253,7 +254,7 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
         else:
             instruction = f"Briefly reflect on {c_text}. {time_context} Then provide a sophisticated introduction for {n_text}. Approx 150 words. Do NOT include sound effects. Write ONLY the spoken words."
 
-    prompt = f"{persona_setting}\n\n{comment_part}\n\n[Request]\n{instruction}\n\n*Write in elegant English only (except after [LOG] if requested). Strictly NO sound effects or stage directions."
+    prompt = f"{persona_setting}\n\n{comment_part}\n\n[Request]\n{instruction}\n\n*Write in elegant {SPEAK_LANG} only (except after [LOG] if requested). Strictly NO sound effects or stage directions."
 
     try:
         response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
