@@ -9,7 +9,7 @@ import pytchat
 import asyncio
 import edge_tts
 import shutil
-import threading    
+import threading
 from datetime import datetime, timezone, timedelta
 from google import genai
 
@@ -19,13 +19,13 @@ from google import genai
 api_key = os.environ.get("GEMINI_API_KEY")
 
 # --- 選曲モード設定 ---
-RANDOM_MODE = False # Trueでランダム選曲    
-UTC_OFFSET = 9 # JSTなら9 ESTなら-5      
+RANDOM_MODE = False # Trueでランダム選曲
+UTC_OFFSET = 9 # JSTなら9 ESTなら-5
 BOOST_2 = 3.0 # play_flagに2をつけた場合の重み
 # --------------------
 
 # --- YouTube設定 ----
-USE_YOUTUBE = True         # True（配信用）ならYouTube、Falseならcomment.txtを使用
+USE_YOUTUBE = False         # True（配信用）ならYouTube、Falseならcomment.txtを使用
 VIDEO_ID = "OoaxPLyjS9g"   # YouTubeの動画ID（URLの最後にある英数字）ダブルクォーテーションで囲むこと
 comment_buffer = []      # YouTube用バッファ
 # --------------------
@@ -33,7 +33,8 @@ comment_buffer = []      # YouTube用バッファ
 MUSIC_FOLDER = r"D:/Music"  # 音楽ファイルのフォルダ
 CSV_PATH = "musicdata.csv"  # 音楽データのCSVファイル
 MODEL_NAME = 'gemini-2.5-flash' # LLMのモデル名（2026年2月現在'gemini-2.5-flash'は存在する）
-VOICE_NAME = "en-US-ChristopherNeural"
+VOICE_NAME = "en-US-ChristopherNeural" # Edge-TTSの声
+SPEAK_LANG = "English" # AIの言語設定
 
 if api_key:
     client = genai.Client(api_key=api_key)
@@ -49,7 +50,7 @@ DEFAULT_SCRIPT = "The stars are always there. Let the music speak for its essenc
 # --------------------
 
 # --- 音の設定 ---
-VOICE_LEVEL = 1.0    # DJ音量
+VOICE_LEVEL = 0.9    # DJ音量
 MUSIC_LEVEL = 0.8    # 音楽音量
 MAX_PLAY_TIME = 180  # 最大再生時間
 POST_TALK_WAIT = 3.0 # 話後待機時間
@@ -59,11 +60,11 @@ POST_TALK_WAIT = 3.0 # 話後待機時間
 # 2. File & Metadata Management
 # ==========================================
 
-def load_persona(): # AIペルソナの読み込み    
+def load_persona(): # AIペルソナの読み込み
     if os.path.exists("persona.txt"):
         with open("persona.txt", "r", encoding="utf-8") as f:
             return f.read().strip() # persona.txtがない場合は、以下のデフォルトのペルソナを使用する
-    return "You are Silas Requiem, a sophisticated AI DJ for a classical program. Use elegant, philosophical English only."
+    return f"You are Silas Requiem, a sophisticated AI DJ for a classical program. Use elegant, philosophical {SPEAK_LANG} only."
 
 def get_and_clear_comments(): # 配信スイッチに基づいてコメント取得先を自動で切り替える
     if USE_YOUTUBE: # YouTubeモード：メモリ上のコメントバッファを返す
@@ -104,7 +105,7 @@ def fetch_comments_sync(video_id):
 
 def load_song_database(): # 音楽CSVの読み込み
     song_db = {}
-    if not os.path.exists(CSV_PATH): 
+    if not os.path.exists(CSV_PATH):
         return song_db
     try:
         with open(CSV_PATH, 'r', encoding='utf-8-sig') as f:
@@ -114,7 +115,7 @@ def load_song_database(): # 音楽CSVの読み込み
                     key_id = int(row['id'])
                     song_db[key_id] = {
                         'play_flag': int(row.get('play_flag', 0)),
-                        'time_scale': float(row.get('time_scale', 5)), 
+                        'time_scale': float(row.get('time_scale', 5)),
                         'last_played': row.get('last_played', ''),
                         'title': row.get('title', 'Unknown Title'),
                         'composer': row.get('composer', 'Unknown Composer'),
@@ -124,7 +125,7 @@ def load_song_database(): # 音楽CSVの読み込み
     except Exception as e: print(f"   [Error] CSV Load Failed: {e}")
     return song_db
 
-def scan_music_files(): # 音楽ファイルのスキャン    
+def scan_music_files(): # 音楽ファイルのスキャン
     files_map = {}
     all_files = glob.glob(os.path.join(MUSIC_FOLDER, "*.mp3"))
     for path in all_files:
@@ -152,10 +153,10 @@ def get_target_scale(): # 目標スケールの取得
     # 正午（43200秒）との距離に基づき、1.0から9.0の間で変動させる
     return 9.0 - (abs(43200 - seconds) / 43200.0) * 8.0
 
-def select_next_song_weighted(song_db, available_ids): # 選曲エンジン   
+def select_next_song_weighted(song_db, available_ids): # 選曲エンジン
     t_target = get_target_scale()
     now_ts = get_now_jst().timestamp()
-    
+
     candidates, weights = [], []
     for sid in available_ids:
         song = song_db.get(sid)
@@ -197,7 +198,7 @@ def save_song_database():
     #"""蓄積されたメモリ上の情報を、一度だけファイルへ記録する"""
     if not os.path.exists(CSV_PATH) or not SONG_DB:
         return
-    
+
     fieldnames = []
     with open(CSV_PATH, 'r', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
@@ -227,11 +228,11 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
     is_seasonal = (prompt_type in ["opening", "closing"]) or (random.random() < 0.3) # 30%の確率で季節の挨拶を含める
     now_local = get_now_jst()  # 現在時刻
     time_context = f"Briefly touch upon the feeling of this hour: {now_local.strftime('%Y-%m-%d %H')} (UTC{UTC_OFFSET:+}). Do not mention exact time." if is_seasonal else ""
-    
+
     if prompt_type == "opening":
-        instruction = f"Write a program opening. Greet listeners. {time_context} Approx 100 words. Do NOT describe sound effects (e.g. 'music starts'). Write ONLY the spoken English words."
+        instruction = f"Write a program opening. Greet listeners. {time_context} Approx 100 words. Do NOT describe sound effects (e.g. 'music starts'). Write ONLY the spoken {SPEAK_LANG} words."
     elif prompt_type == "closing":
-        instruction = f"Write a program closing. Bid farewell to the day. Approx 100 words. Do NOT describe sound effects. Write ONLY the spoken English words."
+        instruction = f"Write a program closing. Bid farewell to the day. Approx 100 words. Do NOT describe sound effects. Write ONLY the spoken {SPEAK_LANG} words."
     else:
         c_text = f"'{current_info['title']}' by {current_info['composer']}, performed by {current_info['performer']}"
         n_text = f"'{next_info['title']}' by {next_info['composer']}, performed by {next_info['performer']}"
@@ -240,9 +241,9 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
             instruction = (
                 f"[SPEECH SECTION]\n"
                 f"Write a 150-word script. Briefly Reflect on {c_text}. "
-                f"Then, summarize the essence of one listener's message and offer a warm, thoughtful response that provides genuine comfort. "
+                f"Then, summarize the essence of one listener's message and offer a warm, thoughtful response addressing them by name that provides genuine comfort."
                 f"Finally, Briefly introduce {n_text}.\n"
-                f"CRITICAL: Use ONLY English. NO other languages, and NO non-English characters are allowed in this section. Do NOT use numbering, bullet points, or separators.\n\n"
+                f"CRITICAL: Use ONLY {SPEAK_LANG}. NO other languages are allowed in this section. Do NOT use numbering, bullet points, separators, or asterisks.\n\n"
                 f"[LOG SECTION]\n"
                 f"Provide a brief Japanese translation of your response to the listener, prefixed with '[LOG]'.\n\n"
                 f"Messages from Unpurified Souls:\n{comments if comments else 'None'}"
@@ -250,12 +251,21 @@ async def generate_script_async(prompt_type, current_info=None, next_info=None, 
         else:
             instruction = f"Briefly reflect on {c_text}. {time_context} Then provide a sophisticated introduction for {n_text}. Approx 150 words. Do NOT include sound effects. Write ONLY the spoken words."
 
-    prompt = f"{persona_setting}\n\n{comment_part}\n\n[Request]\n{instruction}\n\n*Write in elegant English only (except after [LOG] if requested). Strictly NO sound effects or stage directions."
+    prompt = f"{persona_setting}\n\n{comment_part}\n\n[Request]\n{instruction}\n\n*Write in elegant {SPEAK_LANG} only (except after [LOG] if requested). Strictly NO sound effects or stage directions."
 
     try:
         response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
         return response.text.strip()
     except Exception as e: return f"System Error: {e}"
+
+async def retry_async(func, *args, **kwargs): 
+    for i in range(MAX_RETRIES):
+        try:
+            return await func(*args, **kwargs)
+        except Exception as e:
+            if i == MAX_RETRIES - 1:
+                return None
+            await asyncio.sleep(1)
 
 async def prepare_next_talk(prompt_type, current_info, next_info, comments, output_file):
     # 台本生成から音声合成までを一括して管理する。
@@ -263,7 +273,7 @@ async def prepare_next_talk(prompt_type, current_info, next_info, comments, outp
 
     # 1. 台本生成（リトライとタイムアウトを適用）
     full_response = await safe_call(generate_script_async, prompt_type, current_info, next_info, comments)
-    
+
     if not full_response: 
         # 通信全滅時のフォールバック
         speech_text = DEFAULT_SCRIPT
@@ -280,14 +290,15 @@ async def prepare_next_talk(prompt_type, current_info, next_info, comments, outp
     if log_text:
         print(f"\n[Translation Log]\n{log_text}\n")
 
-    # 2. 音声合成（リトライを適用）
+    # 2. 音声合成（中身は「実行」のみに集中させる）
     async def synthesize():
         communicate = edge_tts.Communicate(speech_text, VOICE_NAME, rate="-10%")
         await communicate.save(output_file)
         return True
 
-    success = await safe_call(synthesize)
-    
+    # 3. 実行（ここでリトライの論理を適用する）
+    success = await retry_async(synthesize)
+
     if not success:
         print(f"  [System Error] Failed to generate audio file: {output_file}")
         if os.path.exists(output_file): os.remove(output_file)
@@ -314,7 +325,7 @@ async def safe_call(func, *args, **kwargs):
 # ==========================================
 
 async def main_loop():
-    pygame.mixer.pre_init(44100, -16, 2, 4096) 
+    pygame.mixer.pre_init(44100, -16, 2, 4096)
     pygame.mixer.init()
 
     # --- チャット取得を「純粋なスレッド」として分離 ---
@@ -329,7 +340,7 @@ async def main_loop():
     final_audio = "final.mp3"
 
     played_in_session = []
-    
+
     if not available_ids:
         print("音楽ファイルが見つかりません。")
         return
@@ -365,6 +376,17 @@ async def main_loop():
             duration = sound_temp.get_length()
 
             print(f"\n♪ Now Playing: {current_info['title']} [{int(duration)//60:02}:{int(duration)%60:02}]")
+
+            # ▼▼▼ OBSテロップ用のテキストファイル出力 ▼▼▼
+            try:
+                with open("now_playing.txt", "w", encoding="utf-8") as f:
+                    title = current_info.get('title', 'Unknown Title')
+                    composer = current_info.get('composer', 'Unknown Composer')
+                    f.write(f"♪ Title: {title}  -  Composer: {composer}")
+            except Exception as e:
+                print(f"  [Warning] Failed to write now_playing.txt: {e}")
+            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+            
             pygame.mixer.music.load(SONG_FILES[current_id])
             pygame.mixer.music.set_volume(MUSIC_LEVEL)
             pygame.mixer.music.play()
